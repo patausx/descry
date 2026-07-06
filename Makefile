@@ -17,7 +17,7 @@ SOURCES     := platform/3ds \
 INCLUDES    := core platform/3ds
 APP_TITLE   := descry
 APP_DESCRIPTION := m8-style tracker + synth for new3ds
-APP_AUTHOR  := filicide
+APP_AUTHOR  := patausx
 # NB: 3ds_rules' smdh recipe reads APP_ICON (not ICON!) - without the export
 # smdhtool silently falls back to the devkitPro default icon
 export APP_ICON := $(TOPDIR)/assets/icon.png
@@ -64,7 +64,7 @@ export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export _3DSXFLAGS += --smdh=$(CURDIR)/$(TARGET).smdh
 
-.PHONY: $(BUILD) clean all run send
+.PHONY: $(BUILD) clean all run send cia cci
 
 all: $(BUILD)
 
@@ -74,7 +74,7 @@ $(BUILD):
 
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).smdh $(TARGET).elf
+	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).smdh $(TARGET).elf $(TARGET).cia $(TARGET).3ds
 
 # wifi upload to the 3ds via netloader (press Y in the homebrew launcher)
 # uses $THREEDS_IP when set, otherwise 3dslink searches via broadcast
@@ -82,6 +82,26 @@ run: $(BUILD)
 	3dslink $(if $(THREEDS_IP),-a $(THREEDS_IP)) $(TARGET).3dsx
 
 send: run
+
+# --- cia / cci packaging (needs makerom + bannertool, see ~/tools/3ds) ---
+MAKEROM    ?= makerom
+BANNERTOOL ?= bannertool
+
+$(BUILD)/$(TARGET).bnr: branding/final/banner_256x128.png branding/final/banner_audio.wav
+	$(BANNERTOOL) makebanner -i branding/final/banner_256x128.png \
+	  -a branding/final/banner_audio.wav -o $@
+
+$(BUILD)/$(TARGET)_cia.smdh: assets/icon.png
+	$(BANNERTOOL) makesmdh -s "$(APP_TITLE)" -l "$(APP_DESCRIPTION)" \
+	  -p "$(APP_AUTHOR)" -i assets/icon.png -o $@
+
+cia: $(BUILD) $(BUILD)/$(TARGET).bnr $(BUILD)/$(TARGET)_cia.smdh
+	$(MAKEROM) -f cia -o $(TARGET).cia -elf $(TARGET).elf -rsf $(TARGET).rsf \
+	  -icon $(BUILD)/$(TARGET)_cia.smdh -banner $(BUILD)/$(TARGET).bnr -target t -exefslogo
+
+cci: $(BUILD) $(BUILD)/$(TARGET).bnr $(BUILD)/$(TARGET)_cia.smdh
+	$(MAKEROM) -f cci -o $(TARGET).3ds -elf $(TARGET).elf -rsf $(TARGET).rsf \
+	  -icon $(BUILD)/$(TARGET)_cia.smdh -banner $(BUILD)/$(TARGET).bnr -target t -exefslogo
 
 #---------------------------------------------------------------------------------
 else
