@@ -1,6 +1,5 @@
-# descry
+<p align="center"><img src="docs/banner.png" alt="descry — a music tracker + synthesizer for the New Nintendo 3DS"></p>
 
-a music tracker + synthesizer for the New Nintendo 3DS.
 native homebrew, fixed-point DSP, built-in mic sampler. everything runs on the device.
 
 > *descry* (v.) — to catch sight of something distant or hidden; to discern.
