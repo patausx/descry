@@ -75,16 +75,16 @@ old 3DS is not supported.
 | input | action |
 | --- | --- |
 | D-pad | move cursor |
-| A / B | edit value ±1 · X / Y | ±16 (context-dependent) |
+| A / B | edit value ±1 · X / Y — ±16 (context-dependent) |
 | L / R (tap) | previous / next view |
 | L + D-pad | BPM · R + ↑↓ groove · R + ←→ swing |
-| ZL + X / Y | copy / paste · ZL + B / A | undo / redo |
+| ZL + X / Y | copy / paste · ZL + B / A — undo / redo |
 | ZL + SELECT | clone (song/chain) · selection mode (phrase) |
 | SELECT | preview note · FX command list (on FX columns) |
 | L + SELECT | fullscreen oscilloscope |
 | R + SELECT | screenshot → SD |
 | ZR (hold) | mic record |
-| START | play / stop · SELECT + START | exit |
+| START | play / stop · SELECT + START — exit |
 | touch | keyboard / pads / XY pad / faders / tabs |
 
 ## build
