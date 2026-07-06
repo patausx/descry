@@ -87,13 +87,28 @@ old 3DS is not supported.
 | START | play / stop · SELECT + START — exit |
 | touch | keyboard / pads / XY pad / faders / tabs |
 
+## install
+
+grab the [latest release](https://github.com/patausx/descry/releases/latest):
+
+- **CIA** (recommended on CFW) — install `descry.cia` with FBI; the app gets its
+  own home menu icon + banner
+- **3DSX** — unzip `descry-v1.0.0.zip`, copy the `3ds` folder to the SD card
+  root, launch from the Homebrew Launcher
+- `descry.3ds` — CCI for flashcarts
+
+the zip also carries five demo projects and a starter pack of single-cycle
+wavetables — worth grabbing even if you install the CIA.
+
 ## build
 
 requires devkitPro with the 3DS toolchain:
 
 ```sh
 sudo (dkp-)pacman -S 3ds-dev
-make
+make        # descry.3dsx
+make cia    # descry.cia (needs makerom + bannertool on PATH)
+make cci    # descry.3ds
 ```
 
 produces `descry.3dsx` — copy to `/3ds/descry/` on the SD card and launch from
