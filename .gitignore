@@ -1,0 +1,22 @@
+# build artifacts
+build/
+*.3dsx
+*.elf
+*.smdh
+*.cia
+*.map
+*.lst
+
+# kota project memory / backups (internal)
+.kota/
+
+# editor / os junk
+*.before_polyfix
+*.swp
+*~
+.DS_Store
+
+# downloaded sample working dirs (don't ship kits in repo)
+_ex/
+_extracted/
+_wav/
