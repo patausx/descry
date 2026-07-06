@@ -128,5 +128,5 @@ tools/         # host-side demo generators and render/analysis helpers
 
 GPL-3.0 — see [LICENSE](LICENSE).
 
-made by filicide. inspired by LSDj, the M8 and the DSN-12.
+made by patausx. inspired by LSDj, the M8 and the DSN-12.
 not affiliated with Dirtywave, Nintendo or Korg.
