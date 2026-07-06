@@ -87,8 +87,8 @@ send: run
 MAKEROM    ?= makerom
 BANNERTOOL ?= bannertool
 
-$(BUILD)/$(TARGET).bnr: branding/final/banner_256x128.png branding/final/banner_audio.wav
-	$(BANNERTOOL) makebanner -i branding/final/banner_256x128.png \
+$(BUILD)/$(TARGET).bnr: branding/final/banner_256x128_alpha.png branding/final/banner_audio.wav
+	$(BANNERTOOL) makebanner -i branding/final/banner_256x128_alpha.png \
 	  -a branding/final/banner_audio.wav -o $@
 
 $(BUILD)/$(TARGET)_cia.smdh: assets/icon.png
