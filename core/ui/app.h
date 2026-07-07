@@ -164,10 +164,12 @@ private:
     void draw_fx_section(Draw& d, const seq::Instrument& inst);
     void update_table(const InputState& in);
     void update_mixer(const InputState& in);
+public:
     // push the Song's persisted mixer settings (faders/delay/reverb/duck)
     // into the audio engine. must be called after loading a project -
     // otherwise the settings only kick in when the mixer screen is visited.
     void sync_mixer_from_song();
+private:
     void draw_mixer(Draw& d);
     // bottom-screen touch faders for the Mixer view (9 strips: 8 tracks + master)
     void draw_mixer_faders(Draw& d);
