@@ -770,7 +770,7 @@ void App::draw_bottom(Draw& d) {
         static const H h_l[]      = {{"DPAD","bpm"},{"L/R","prev/next"},{"SEL","scope"}};
         static const H h_l_inst[] = {{"UD","bpm"},{"<>","inst slot"},{"A","clone inst"},{"SEL","scope"}};
         static const H h_r[]     = {{"A","clr cell"},{"B","clr step"},{"UD","groove"},{"LR","swing"}};
-        static const H h_r_phr[] = {{"A","clr cell"},{"B","clr step"},{"Y","clr phrase"},{"UD","groove"},{"LR","swing"}};
+        static const H h_r_phr[] = {{"A","clr cell"},{"B","clr step"},{"Y","clr phr"},{"UD","grv"},{"LR","swg"}};
         static const H h_r_tbl[] = {{"A/B","tbl speed"},{"UD","groove"},{"LR","swing"}};
 
         auto draw_hints = [&](int y, const H* h, int n, ui::Color kc, ui::Color vc) {
