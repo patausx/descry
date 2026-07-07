@@ -649,6 +649,7 @@ int main() {
     auto boot_load_step = [&]() -> bool {
         if (boot_step == 0) {
             seq::load_project(g_project, SESSION_PATH);   // demo stays if absent
+            app.sync_mixer_from_song();   // apply the session's mixer settings
         } else if (boot_step <= (int)synth::SAMPLE_BANK_SIZE) {
             load_sample_from_sd(boot_step - 1);
         } else if (boot_step == (int)synth::SAMPLE_BANK_SIZE + 1) {
@@ -940,6 +941,9 @@ int main() {
                                           "BLANKED (slot %02X was empty)", slot);
                             app.dirty = false;
                         }
+                        // either way the Song's mixer block changed - push it into
+                        // the engine now, not on the next mixer-screen visit
+                        app.sync_mixer_from_song();
                         break;
                     case ui::App::ProjAction::Save:
                         slot_save(slot);

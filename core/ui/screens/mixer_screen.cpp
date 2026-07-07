@@ -51,6 +51,10 @@ static void sync_mixer(seq::Project& p, audio::Mixer& m) {
     m.duck_rel_frames = 2000u + (uint32_t)p.song.duck_rel * 125u;
 }
 
+void App::sync_mixer_from_song() {
+    sync_mixer(project_, mixer_);
+}
+
 void App::update_mixer(const InputState& in) {
     // navigation: left/right across strips; up/down inside the master strip / groove zone
     if (in.left)  mixer_col_ = (mixer_col_ - 1 + MX_COLS) % MX_COLS;
