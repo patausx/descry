@@ -141,6 +141,14 @@ platform/3ds/  # libctru, ndsp audio, citro2d, mic
 tools/         # host-side demo generators and render/analysis helpers
 ```
 
+## see also
+
+- [noise commander 3DS](https://www.patreon.com/NoiseCommander3DS) — a sample-based
+  groovebox for the 3DS by gearmo, handcrafted over years and running on the old
+  3DS too. if descry's tracker shape isn't yours, that's where to go.
+- [LSDj](https://www.littlesounddj.com) · [Dirtywave M8](https://dirtywave.com) —
+  the giants whose shoulders this stands on.
+
 ## license
 
 GPL-3.0 — see [LICENSE](LICENSE).
