@@ -90,6 +90,9 @@ void App::update(const InputState& in) {
             for (int t = 0; t < 8; ++t) {
                 if (!(stick_mask_ & (1u << t))) continue;
                 auto& ts = mixer_.track(t);
+                ts.perf_hold |= audio::TrackState::HOLD_DEL |
+                                audio::TrackState::HOLD_REV |
+                                audio::TrackState::HOLD_BIT;
                 ts.send_del = (fx::q15)v;
                 ts.send_rev = (fx::q15)v;
                 ts.bits = (uint8_t)bits;
@@ -119,6 +122,23 @@ void App::update(const InputState& in) {
 
     if (in.held_l && (in.up || in.down || in.left || in.right)) dirty = true;
     if (in.held_r && (in.up || in.down)) dirty = true;
+
+    // in instrument view L+A - clone the current instrument into the first
+    // free slot and jump there. answers the "i edited one instrument and
+    // another track changed" trap: tweak a copy, the original stays intact.
+    if (in.held_l && in.a && screen_ == Screen::Instrument) {
+        for (int i = 0; i < seq::MAX_INSTRUMENTS; ++i) {
+            if (project_.instruments[i].type == seq::InstrumentType::None) {
+                project_.instruments[i] = project_.instruments[cur_inst_];
+                cur_inst_ = (uint8_t)i;
+                edit_flash_frame_ = frame_;
+                mark_dirty();
+                break;
+            }
+        }
+        return;
+    }
+
     // "global" shortcuts: held L + d-pad - edit BPM (up/down +/-1, left/right +/-10)
     //                      held R + up/down - edit groove (ticks per step)
     if (in.held_l && (in.up || in.down || in.left || in.right)) {
@@ -747,8 +767,11 @@ void App::draw_bottom(Draw& d) {
         static const H h_glob[]  = {{"L/R","view"},{"START","play"},{"ZL/L/R","hold=combos"}};
         // modifier maps
         static const H h_zl[] = {{"X","copy"},{"Y","paste"},{"B","undo"},{"A","redo"},{"SEL","sel/clone"},{"UD","len"}};
-        static const H h_l[]  = {{"DPAD","bpm"},{"L/R","prev/next"},{"SEL","scope"}};
-        static const H h_r[]  = {{"A","clr cell"},{"B","clr step"},{"UD","groove"},{"LR","swing"}};
+        static const H h_l[]      = {{"DPAD","bpm"},{"L/R","prev/next"},{"SEL","scope"}};
+        static const H h_l_inst[] = {{"UD","bpm"},{"<>","inst slot"},{"A","clone inst"},{"SEL","scope"}};
+        static const H h_r[]     = {{"A","clr cell"},{"B","clr step"},{"UD","groove"},{"LR","swing"}};
+        static const H h_r_phr[] = {{"A","clr cell"},{"B","clr step"},{"Y","clr phrase"},{"UD","groove"},{"LR","swing"}};
+        static const H h_r_tbl[] = {{"A/B","tbl speed"},{"UD","groove"},{"LR","swing"}};
 
         auto draw_hints = [&](int y, const H* h, int n, ui::Color kc, ui::Color vc) {
             int x = 8;
@@ -763,8 +786,16 @@ void App::draw_bottom(Draw& d) {
         if (mod_zl_ || mod_l_ || mod_r_) {
             // modifier held: show its combo map, bright (this is the live cheat)
             const char* tag = mod_zl_ ? "ZL" : (mod_l_ ? "L" : "R");
-            const H* mh = mod_zl_ ? h_zl : (mod_l_ ? h_l : h_r);
-            int  mn = mod_zl_ ? 6 : (mod_l_ ? 3 : 4);
+            // R map is contextual: table screen repurposes R+A/B for table speed,
+            // phrase screen adds R+Y = clear whole phrase
+            const H* hr = (screen_ == Screen::Table)  ? h_r_tbl
+                        : (screen_ == Screen::Phrase) ? h_r_phr : h_r;
+            int   hrn  = (screen_ == Screen::Table)  ? 3
+                        : (screen_ == Screen::Phrase) ? 5 : 4;
+            const H* hl = (screen_ == Screen::Instrument) ? h_l_inst : h_l;
+            int   hln  = (screen_ == Screen::Instrument) ? 4 : 3;
+            const H* mh = mod_zl_ ? h_zl : (mod_l_ ? hl : hr);
+            int  mn = mod_zl_ ? 6 : (mod_l_ ? hln : hrn);
             d.rect(4, 45, 16, 17, pal::CURSOR);
             d.text(7, 50, tag, 0xFF313432);
             int x = 26;
@@ -1320,6 +1351,11 @@ void App::tick() {
                              + ((int)base.downsample - (int)ts.downsample) / n);
         }
         --stick_release_;
+        if (stick_release_ == 0) {
+            // ramp finished: hand the params back to the sequencer (mirror of kaoss)
+            for (int t = 0; t < 8; ++t)
+                if (stick_mask_ & (1u << t)) mixer_.track(t).perf_hold = 0;
+        }
     }
 
     // detect playhead step change - for the pulse on each new step.

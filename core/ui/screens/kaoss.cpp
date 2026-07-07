@@ -49,18 +49,30 @@ const char* App::kaoss_dest_name(uint8_t dst) {
 // shared by both axes so X and Y can carry any destination each.
 void App::apply_kaoss_dest(int trk, uint8_t dest, int v) {
     auto& ts = mixer_.track(trk);
+    using TS = audio::TrackState;
     switch ((KaossDest)dest) {
         case KaossDest::Cut:
+            // gesture owns the cutoff now - and an audible cutoff needs an
+            // active filter, so kick a track whose instrument runs filterless
+            // into LPF for the duration of the hold.
+            if (ts.filter_type == dsp::FilterType::Off)
+                ts.filter_type = dsp::FilterType::LPF;
+            ts.perf_hold |= TS::HOLD_CUT | TS::HOLD_FLT;
             ts.cutoff = (fx::q15)(v * fx::Q15_ONE / 1000);
             break;
         case KaossDest::Res:
             // cap at 0.9*ONE like the stick path - full Q self-oscillates too eagerly
+            if (ts.filter_type == dsp::FilterType::Off)
+                ts.filter_type = dsp::FilterType::LPF;
+            ts.perf_hold |= TS::HOLD_RES | TS::HOLD_FLT;
             ts.resonance = (fx::q15)(v * (fx::Q15_ONE * 90 / 100) / 1000);
             break;
         case KaossDest::Del:
+            ts.perf_hold |= TS::HOLD_DEL;
             ts.send_del = (fx::q15)(v * fx::Q15_ONE / 1000);
             break;
         case KaossDest::Rev:
+            ts.perf_hold |= TS::HOLD_REV;
             ts.send_rev = (fx::q15)(v * fx::Q15_ONE / 1000);
             break;
         case KaossDest::Bit: {
@@ -69,6 +81,7 @@ void App::apply_kaoss_dest(int trk, uint8_t dest, int v) {
             int bits = (v < 300) ? 16 - v * 8 / 300
                                  : 8 - (v - 300) * 6 / 700;
             if (bits < 2) bits = 2; if (bits > 16) bits = 16;
+            ts.perf_hold |= TS::HOLD_BIT;
             ts.bits = (uint8_t)bits;
             break;
         }
@@ -90,6 +103,7 @@ void App::apply_kaoss_dest(int trk, uint8_t dest, int v) {
             break;
         case KaossDest::Pan:
             // signed: center = C, left/right = hard pan
+            ts.perf_hold |= TS::HOLD_PAN;
             ts.pan = (fx::q15)((v - 500) * fx::Q15_ONE / 500);
             break;
         default: break;
@@ -224,6 +238,11 @@ void App::kaoss_tick() {
                          + ((int)base.downsample - (int)ts.downsample) / n);
     }
     --kaoss_release_;
+    if (kaoss_release_ == 0) {
+        // ramp finished: hand the params back to the sequencer/instrument defaults
+        for (int t = 0; t < audio::NUM_TRACKS; ++t)
+            if (kaoss_grab_mask_ & (1u << t)) mixer_.track(t).perf_hold = 0;
+    }
 }
 
 void App::draw_kaoss(Draw& d) {

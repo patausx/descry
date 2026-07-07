@@ -258,8 +258,15 @@ void App::touch(int x, int y) {
             return;
         }
         if (x >= 208 && x < 258) {
-            // REC toggle
+            // REC toggle. REC records notes you PLAY - so if the drumkit GEN
+            // panel is open (no playable surface), flip back to the pads first
+            // (gearmo: "tapping REC in GEN mode has no effect").
             rec_mode_ = !rec_mode_;
+            if (rec_mode_ && screen_ == Screen::Instrument &&
+                project_.instruments[cur_inst_].type == seq::InstrumentType::DrumKit &&
+                kit_panel_ == KitPanel::Gen) {
+                kit_panel_ = KitPanel::Kb;
+            }
             return;
         }
     }

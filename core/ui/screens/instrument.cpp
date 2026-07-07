@@ -1595,6 +1595,24 @@ void App::draw_instrument(Draw& d) {
     d.text(20, Y0, buf, pal::HEADER, 1);
     d.text(20, Y0 + 12, inst.name, pal::FG, 1);
 
+    // bank awareness: instruments are GLOBAL, not owned by a track. editing
+    // slot 00 changes every phrase whose I column says 00 - make that visible.
+    {
+        int used = 0;
+        for (int p = 0; p < seq::MAX_PHRASES; ++p) {
+            const auto& ph = project_.phrases[p];
+            for (int s = 0; s < seq::PHRASE_STEPS; ++s)
+                if (ph.steps[s].instrument == cur_inst_) { ++used; break; }
+        }
+        char ub[40];
+        if (used > 0) std::snprintf(ub, sizeof(ub), "USED IN %d PHRASE%s", used, used == 1 ? "" : "S");
+        else          std::snprintf(ub, sizeof(ub), "UNUSED");
+        int ulen = (int)std::strlen(ub);
+        d.text(396 - ulen * 6, Y0, ub, used ? pal::FG_DIM : pal::GRID);
+        static const char* slot_hint = "L+<> SLOT  L+A CLONE";
+        d.text(396 - (int)std::strlen(slot_hint) * 6, Y0 + 12, slot_hint, pal::GRID);
+    }
+
     static const char* type_names[] = {"NONE", "WAVSYN", "SAMPLER", "DRUMKIT", "FMSYN", "DSN"};
     static const char* shape_names[] = {"SINE", "SAW", "SQUAR", "TRI", "NOIS"};
     static const char* note_names[12] = {"C ","C#","D ","D#","E ","F ","F#","G ","G#","A ","A#","B "};

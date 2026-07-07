@@ -40,6 +40,10 @@ public:
 
     // call every audio block: advises how many frames until the next tick
     // and triggers steps when the tick arrives
+    // fires due ticks, then consumes up to max_frames; returns frames consumed.
+    // call in a loop, rendering the returned count after each call, for
+    // tick-accurate (sub-buffer) event timing.
+    int32_t advance_upto(int32_t max_frames, int sample_rate);
     void advance(std::size_t frames, int sample_rate);
 
     bool playing() const { return any_playing_; }

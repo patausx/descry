@@ -304,9 +304,17 @@ void App::update_phrase(const InputState& in) {
     // === quick erase (held R) ===
     //   R + B - clear the WHOLE step (note/inst/vel/all fx)
     //   R + A - clear only the cell under the cursor
+    //   R + Y - clear the ENTIRE phrase (one undo record per step)
     if (in.held_r) {
         if (in.b) { snapshot_step(cursor_row_); clear_step(cursor_row_); commit_step(cursor_row_); dirty = true; }
         if (in.a) { snapshot_step(cursor_row_); clear_cell(cursor_row_, cursor_col_); commit_step(cursor_row_); dirty = true; }
+        if (in.y) {
+            for (int r = 0; r < seq::PHRASE_STEPS; ++r) {
+                snapshot_step(r); clear_step(r); commit_step(r);
+            }
+            edit_flash_frame_ = frame_;
+            dirty = true;
+        }
         return;  // under held_r don't edit values
     }
 

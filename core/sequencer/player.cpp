@@ -22,6 +22,7 @@ void Player::reset_track_fx(int track) {
     tr.send_rev   = 0;
     tr.volume     = fx::Q15_ONE;
     tr.pan        = 0;
+    tr.perf_hold  = 0;   // release any kaoss/stick param ownership
 }
 
 void Player::play_song(uint16_t from_row) {
@@ -128,6 +129,7 @@ void Player::stop() {
         tr.send_rev   = 0;
         tr.volume     = fx::Q15_ONE;
         tr.pan        = 0;
+        tr.perf_hold  = 0;
     }
     // clear reverb and delay tails so everything goes silent + DC blocker state
     mixer_.reverb.reset();
@@ -326,21 +328,34 @@ void Player::fire_note(int track, int note, uint8_t inst, uint8_t vel) {
 // used by trigger_step (sequencer) AND by UI previews (touch keyboard, SELECT),
 // so what you hear while editing == what plays in the sequence.
 void Player::apply_inst_fx_defaults(const Instrument& inst, audio::TrackState& mt) {
+    // performance hold: parameters currently owned by a kaoss/stick gesture
+    // are skipped - otherwise every note trigger stomps the live gesture
+    // (this was why kaoss cutoff/res "did nothing" during playback).
+    const uint16_t hold = mt.perf_hold;
     // filter type: 0=off->Off, 1=LP, 2=HP, 3=BP, 4=Notch
-    switch (inst.fx_filter_type) {
-        case 1: mt.filter_type = dsp::FilterType::LPF;   break;
-        case 2: mt.filter_type = dsp::FilterType::HPF;   break;
-        case 3: mt.filter_type = dsp::FilterType::BPF;   break;
-        case 4: mt.filter_type = dsp::FilterType::Notch; break;
-        default: mt.filter_type = dsp::FilterType::Off;  break;
+    if (!(hold & audio::TrackState::HOLD_FLT)) {
+        switch (inst.fx_filter_type) {
+            case 1: mt.filter_type = dsp::FilterType::LPF;   break;
+            case 2: mt.filter_type = dsp::FilterType::HPF;   break;
+            case 3: mt.filter_type = dsp::FilterType::BPF;   break;
+            case 4: mt.filter_type = dsp::FilterType::Notch; break;
+            default: mt.filter_type = dsp::FilterType::Off;  break;
+        }
     }
-    mt.cutoff    = (fx::q15)((int)inst.fx_cutoff    * fx::Q15_ONE / 255);
-    mt.resonance = (fx::q15)((int)inst.fx_resonance * fx::Q15_ONE / 255);
-    mt.send_del  = (fx::q15)((int)inst.fx_send_del  * fx::Q15_ONE / 255);
-    mt.send_rev  = (fx::q15)((int)inst.fx_send_rev  * fx::Q15_ONE / 255);
-    mt.volume    = (fx::q15)((int)inst.fx_volume    * fx::Q15_ONE / 255);
-    mt.pan       = (fx::q15)((int)inst.fx_pan       * fx::Q15_ONE / 128);  // -ONE..+ONE
-    mt.bits      = inst.fx_bits;
+    if (!(hold & audio::TrackState::HOLD_CUT))
+        mt.cutoff    = (fx::q15)((int)inst.fx_cutoff    * fx::Q15_ONE / 255);
+    if (!(hold & audio::TrackState::HOLD_RES))
+        mt.resonance = (fx::q15)((int)inst.fx_resonance * fx::Q15_ONE / 255);
+    if (!(hold & audio::TrackState::HOLD_DEL))
+        mt.send_del  = (fx::q15)((int)inst.fx_send_del  * fx::Q15_ONE / 255);
+    if (!(hold & audio::TrackState::HOLD_REV))
+        mt.send_rev  = (fx::q15)((int)inst.fx_send_rev  * fx::Q15_ONE / 255);
+    if (!(hold & audio::TrackState::HOLD_VOL))
+        mt.volume    = (fx::q15)((int)inst.fx_volume    * fx::Q15_ONE / 255);
+    if (!(hold & audio::TrackState::HOLD_PAN))
+        mt.pan       = (fx::q15)((int)inst.fx_pan       * fx::Q15_ONE / 128);  // -ONE..+ONE
+    if (!(hold & audio::TrackState::HOLD_BIT))
+        mt.bits      = inst.fx_bits;
 }
 
 void Player::trigger_step(int track) {
@@ -732,8 +747,22 @@ void Player::on_tick() {
 }
 
 void Player::advance(std::size_t frames, int sample_rate) {
+    // legacy whole-window variant (host tools). same semantics as before:
+    // all ticks in the window fire, frame accounting is kept.
+    int32_t remaining = static_cast<int32_t>(frames);
+    while (remaining > 0)
+        remaining -= advance_upto(remaining, sample_rate);
+}
+
+// fire any due ticks at the current position, then consume up to max_frames
+// of silence-between-ticks. returns the consumed count (always >= 1 when
+// max_frames >= 1) so the audio worker can render exactly that many frames
+// before asking again -> note-ons land sample-accurate inside the buffer
+// instead of being quantized to buffer starts (was: up to 32ms of jitter).
+int32_t Player::advance_upto(int32_t max_frames, int sample_rate) {
     audio::Mixer::LockGuard _g(mixer_);
-    if (!any_playing_) return;
+    if (max_frames <= 0) return 0;
+    if (!any_playing_) return max_frames;
 
     // length of ONE TICK in frames. a step lasts `groove` ticks (M8-style).
     // bpm counts quarter notes; *4 = sixteenths (= steps); *TICKS_PER_STEP = ticks.
@@ -743,44 +772,40 @@ void Player::advance(std::size_t frames, int sample_rate) {
                         / (project_.song.bpm * 4 * TICKS_PER_STEP);
     if (frames_per_tick < 1) frames_per_tick = 1;
 
-    int32_t remaining = static_cast<int32_t>(frames);
-    while (remaining > 0) {
-        // fire the very first tick immediately on play start
-        if (first_tick_) {
-            first_tick_ = false;
-            frames_to_next_tick_ = 0;
-        }
-
-        if (frames_to_next_tick_ <= 0) {
-            // remember whether this tick STARTS a new step (before on_tick advances counters)
-            bool step_start = (tick_in_step_ == 0);
-            on_tick();
-
-            // === SWING / SHUFFLE ===
-            // swing delays every other STEP: odd-numbered steps start later by stealing
-            // time from the preceding even step. swing 0 = straight, swing 50 = max shuffle.
-            // applied only on the tick that begins a step (so the whole step shifts).
-            int swing = project_.song.swing;
-            int dur = frames_per_tick;
-            if (swing > 0 && step_start) {
-                // step parity: even steps lengthen, the following odd steps shorten.
-                // tick_counter_ already advanced; the step we just started is counted below.
-                int offset = (frames_per_tick * swing) / 100;
-                bool even_step = ((swing_step_ & 1) == 0);
-                dur = even_step ? (frames_per_tick + offset) : (frames_per_tick - offset);
-                if (dur < 1) dur = 1;
-                ++swing_step_;
-            }
-            frames_to_next_tick_ = dur;
-            continue;
-        }
-
-        // consume frames up to the next tick boundary
-        int32_t consume = remaining;
-        if (frames_to_next_tick_ < consume) consume = frames_to_next_tick_;
-        frames_to_next_tick_ -= consume;
-        remaining -= consume;
+    // fire the very first tick immediately on play start
+    if (first_tick_) {
+        first_tick_ = false;
+        frames_to_next_tick_ = 0;
     }
+
+    while (frames_to_next_tick_ <= 0) {
+        // remember whether this tick STARTS a new step (before on_tick advances counters)
+        bool step_start = (tick_in_step_ == 0);
+        on_tick();
+
+        // === SWING / SHUFFLE ===
+        // swing delays every other STEP: odd-numbered steps start later by stealing
+        // time from the preceding even step. swing 0 = straight, swing 50 = max shuffle.
+        // applied only on the tick that begins a step (so the whole step shifts).
+        int swing = project_.song.swing;
+        int dur = frames_per_tick;
+        if (swing > 0 && step_start) {
+            // step parity: even steps lengthen, the following odd steps shorten.
+            // tick_counter_ already advanced; the step we just started is counted below.
+            int offset = (frames_per_tick * swing) / 100;
+            bool even_step = ((swing_step_ & 1) == 0);
+            dur = even_step ? (frames_per_tick + offset) : (frames_per_tick - offset);
+            if (dur < 1) dur = 1;
+            ++swing_step_;
+        }
+        frames_to_next_tick_ = dur;
+        if (!any_playing_) return max_frames;   // everything stopped on this tick
+    }
+
+    int32_t consume = (frames_to_next_tick_ < max_frames) ? frames_to_next_tick_
+                                                          : max_frames;
+    frames_to_next_tick_ -= consume;
+    return consume;
 }
 
 } // namespace trackr::seq

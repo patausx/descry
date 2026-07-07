@@ -197,11 +197,19 @@ void Audio3DS::worker_loop() {
 
             // === critical section: sequencer + render ===
             // RecursiveLock - the UI may be doing replace_voice() at this time and it will wait.
+            // advance/render are interleaved at tick boundaries so note-ons land
+            // sample-accurate inside the buffer (fixes tempo jitter up to 32ms).
             {
                 audio::Mixer::LockGuard _g(*mixer_);
-                if (player_) player_->advance(FRAMES_PER_BUF, AUDIO_SR);
-                mixer_->render(reinterpret_cast<fx::q15*>(buf_data_[idx]),
-                               FRAMES_PER_BUF);
+                auto* out = reinterpret_cast<fx::q15*>(buf_data_[idx]);
+                int32_t done = 0;
+                while (done < FRAMES_PER_BUF) {
+                    int32_t n = player_
+                        ? player_->advance_upto(FRAMES_PER_BUF - done, AUDIO_SR)
+                        : (FRAMES_PER_BUF - done);
+                    mixer_->render(out + done * 2, n);
+                    done += n;
+                }
             }
 
             DSP_FlushDataCache(buf_data_[idx],

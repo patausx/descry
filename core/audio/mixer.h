@@ -42,6 +42,18 @@ struct TrackState {
     // track fires (0 = unaffected, Q15_ONE = full mute at envelope peak)
     fx::q15 duck_amt  = 0;
 
+    // === performance hold (kaoss pad / analog sticks) ===
+    // while a gesture owns a parameter, note triggers must NOT stomp it with
+    // the instrument's FX defaults (apply_inst_fx_defaults checks these bits).
+    // set by apply_kaoss_dest / stick writes, cleared when the release ramp
+    // finishes and on player stop.
+    enum PerfHold : uint16_t {
+        HOLD_CUT = 1 << 0, HOLD_RES = 1 << 1, HOLD_DEL = 1 << 2,
+        HOLD_REV = 1 << 3, HOLD_BIT = 1 << 4, HOLD_PAN = 1 << 5,
+        HOLD_FLT = 1 << 6, HOLD_VOL = 1 << 7,
+    };
+    uint16_t perf_hold = 0;
+
     // filter state - new module (Svf2 per channel)
     dsp::Svf2 filter_l;
     dsp::Svf2 filter_r;
