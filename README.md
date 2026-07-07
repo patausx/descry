@@ -4,6 +4,9 @@ native homebrew, fixed-point DSP, built-in mic sampler. everything runs on the d
 
 > *descry* (v.) — to catch sight of something distant or hidden; to discern.
 
+**new here? read the [user guide](docs/GUIDE.md)** — quickstart, the data
+model, every screen, all FX commands, sampling and performance tricks.
+
 ## what it is
 
 descry is a portable tracker in the tradition of [LSDj](https://www.littlesounddj.com),
