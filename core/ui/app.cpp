@@ -72,10 +72,12 @@ void App::update(const InputState& in) {
             kaoss_y_ = vy;
             dirty = true;
         }
-        // right stick: X -> delay+reverb send (0..ONE)
+        // right stick: X -> delay+reverb send (0..ONE, perceptual x(2-x) curve)
         if (in.cstick_active) {
             int v = (in.cstick_x + 1000) * fx::Q15_ONE / 2000;
             if (v < 0) v = 0; if (v > fx::Q15_ONE) v = fx::Q15_ONE;
+            v = (int)(((int64_t)v * (2 * fx::Q15_ONE - v)) / fx::Q15_ONE);
+            if (v > fx::Q15_ONE) v = fx::Q15_ONE;
             // right Y -> bitcrush. center/up = clean, down = grittier.
             // bit-mask crush is only audible below ~8 bits, so spend most travel there.
             int down = in.cstick_y < 0 ? -in.cstick_y : 0;   // 0..1000 pull-down amount

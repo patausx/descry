@@ -67,14 +67,20 @@ void App::apply_kaoss_dest(int trk, uint8_t dest, int v) {
             ts.perf_hold |= TS::HOLD_RES | TS::HOLD_FLT;
             ts.resonance = (fx::q15)(v * (fx::Q15_ONE * 90 / 100) / 1000);
             break;
-        case KaossDest::Del:
+        case KaossDest::Del: {
+            // perceptual curve x(2-x): the linear pad felt dead until the very
+            // top (half pad = -6dB into the bus). now half pad = 75% send.
+            int c = v * (2000 - v) / 1000;               // 0..1000
             ts.perf_hold |= TS::HOLD_DEL;
-            ts.send_del = (fx::q15)(v * fx::Q15_ONE / 1000);
+            ts.send_del = (fx::q15)(c * fx::Q15_ONE / 1000);
             break;
-        case KaossDest::Rev:
+        }
+        case KaossDest::Rev: {
+            int c = v * (2000 - v) / 1000;
             ts.perf_hold |= TS::HOLD_REV;
-            ts.send_rev = (fx::q15)(v * fx::Q15_ONE / 1000);
+            ts.send_rev = (fx::q15)(c * fx::Q15_ONE / 1000);
             break;
+        }
         case KaossDest::Bit: {
             // low end = clean, high = crushed. bit-mask crush is only audible below
             // ~8 bits, so spend most travel there (same curve as the C-stick).
@@ -92,7 +98,18 @@ void App::apply_kaoss_dest(int trk, uint8_t dest, int v) {
             ts.mg_rate = (fx::q15)(v * fx::Q15_ONE / 1000);
             break;
         case KaossDest::Mgc:
-            // signed depth: center = 0, up = positive wobble, down = inverted
+            // signed depth: center = 0, up = positive wobble, down = inverted.
+            // a wobble needs headroom: cutoff mod is base+mod CLAMPED at 1.0,
+            // so with the filter fully open the positive half just clamps and
+            // you hear half a wobble at best. engage LPF and pull the base to
+            // ~55% while the gesture owns it (release ramp restores baseline).
+            if (ts.filter_type == dsp::FilterType::Off)
+                ts.filter_type = dsp::FilterType::LPF;
+            ts.perf_hold |= TS::HOLD_FLT;
+            if (ts.cutoff > (fx::q15)(fx::Q15_ONE * 85 / 100)) {
+                ts.perf_hold |= TS::HOLD_CUT;
+                ts.cutoff = (fx::q15)(fx::Q15_ONE * 55 / 100);
+            }
             ts.mg_to_cutoff = (int16_t)((v - 500) * 32767 / 500);
             break;
         case KaossDest::Mgv:
