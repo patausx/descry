@@ -69,6 +69,9 @@ public:
         return mx;
     }
 
+    int     ui_env_stage(int idx) const override { return (int)ops_[idx & 3].stage; }
+    fx::q15 ui_env_level(int idx) const override { return (fx::q15)(ops_[idx & 3].env >> 15); }
+
     FmSynthParams params;
 
     // per-op state - public so advance_env (free helper) can access it

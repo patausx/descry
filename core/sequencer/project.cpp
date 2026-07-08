@@ -5,34 +5,71 @@ namespace trackr::seq {
 audio::Voice* Project::make_voice(uint8_t instrument_id) {
     if (instrument_id >= MAX_INSTRUMENTS) return nullptr;
     auto& inst = instruments[instrument_id];
+    audio::Voice* v = nullptr;
     switch (inst.type) {
         case InstrumentType::Wavsynth: {
-            auto* v = new synth::Wavsynth();
-            v->params = inst.wavsynth;
-            return v;
+            auto* w = new synth::Wavsynth();
+            w->params = inst.wavsynth;
+            v = w;
+            break;
         }
         case InstrumentType::Sampler: {
-            auto* v = new synth::Sampler();
-            v->params = inst.sampler;
-            return v;
+            auto* s = new synth::Sampler();
+            s->params = inst.sampler;
+            v = s;
+            break;
         }
         case InstrumentType::DrumKit: {
-            auto* v = new synth::DrumKitVoice();
-            v->params = inst.drumkit;
-            return v;
+            auto* d = new synth::DrumKitVoice();
+            d->params = inst.drumkit;
+            v = d;
+            break;
         }
         case InstrumentType::FmSynth: {
-            auto* v = new synth::FmSynth();
-            v->params = inst.fm;
-            return v;
+            auto* f = new synth::FmSynth();
+            f->params = inst.fm;
+            v = f;
+            break;
         }
         case InstrumentType::DsnSynth: {
-            auto* v = new synth::DsnSynth();
-            v->params = inst.dsn;
-            return v;
+            auto* d = new synth::DsnSynth();
+            d->params = inst.dsn;
+            v = d;
+            break;
         }
         default:
             return nullptr;
+    }
+    // provenance tag - lets refresh_voice_params() find live voices of this
+    // instrument later (live param tweak on held/playing notes).
+    v->inst_id   = instrument_id;
+    v->inst_type = (uint8_t)inst.type;
+    return v;
+}
+
+// push the CURRENT instrument params into an already-sounding voice.
+// no-op unless the voice was spawned from this instrument AND its type hasn't
+// changed since (the tag guards the static_cast). envelopes/phase are untouched -
+// only the param block is refreshed, so a held note reacts to cutoff/etc edits.
+// caller must hold the mixer audio lock.
+bool Project::refresh_voice_params(audio::Voice* v, uint8_t instrument_id) {
+    if (!v || instrument_id >= MAX_INSTRUMENTS) return false;
+    if (v->inst_id != instrument_id) return false;
+    const auto& inst = instruments[instrument_id];
+    if (v->inst_type != (uint8_t)inst.type) return false;
+    switch (inst.type) {
+        case InstrumentType::Wavsynth:
+            static_cast<synth::Wavsynth*>(v)->params = inst.wavsynth;    return true;
+        case InstrumentType::Sampler:
+            static_cast<synth::Sampler*>(v)->params = inst.sampler;      return true;
+        case InstrumentType::DrumKit:
+            static_cast<synth::DrumKitVoice*>(v)->params = inst.drumkit; return true;
+        case InstrumentType::FmSynth:
+            static_cast<synth::FmSynth*>(v)->params = inst.fm;           return true;
+        case InstrumentType::DsnSynth:
+            static_cast<synth::DsnSynth*>(v)->params = inst.dsn;         return true;
+        default:
+            return false;
     }
 }
 

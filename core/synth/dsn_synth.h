@@ -125,6 +125,9 @@ public:
     void cut() override;
     bool render(fx::q15* out, std::size_t frames) override;
 
+    int     ui_env_stage(int idx) const override { return (int)(idx ? eg2_ : eg1_).stage; }
+    fx::q15 ui_env_level(int idx) const override { return (idx ? eg2_ : eg1_).q15(); }
+
     DsnSynthParams params;
 
 private:

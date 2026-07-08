@@ -110,6 +110,9 @@ public:
     int current_frame() const override { return (int)pos_hi_; }
     int current_sample_slot() const override { return params.sample_slot; }
 
+    int     ui_env_stage(int) const override { return (int)stage_; }
+    fx::q15 ui_env_level(int) const override { return (fx::q15)(env_ >> 16); }
+
     SamplerParams params;
 
 private:

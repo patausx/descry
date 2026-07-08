@@ -34,6 +34,20 @@ public:
     // envelope so the pool steals the quietest dying tail instead of a loud one.
     virtual fx::q31 steal_weight() const { return 0x7FFFFFFF; }
 
+    // === UI envelope introspection (env popup live dot) ===
+    // current amplitude-envelope stage (0=idle 1=atk 2=dec 3=sus 4=rel, -1 = n/a)
+    // and its level (q15). `idx` selects a sub-envelope where it makes sense
+    // (FM: operator index, DSN: 0=EG1 1=EG2). read by the UI thread without a
+    // lock - single word loads, worst case one frame of visual lag.
+    virtual int     ui_env_stage(int idx = 0) const { (void)idx; return -1; }
+    virtual fx::q15 ui_env_level(int idx = 0) const { (void)idx; return 0; }
+
+    // provenance tag: which project instrument spawned this voice (and its type
+    // at spawn time). lets the instrument editor push param edits into voices
+    // that are ALREADY sounding (live tweak on a held note). 0xFF = untagged.
+    uint8_t inst_id   = 0xFF;
+    uint8_t inst_type = 0xFF;
+
 protected:
     bool active_ = false;
 };

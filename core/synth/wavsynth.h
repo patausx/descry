@@ -34,6 +34,9 @@ public:
     void cut() override;
     bool render(fx::q15* out, std::size_t frames) override;
 
+    int     ui_env_stage(int) const override { return (int)stage_; }
+    fx::q15 ui_env_level(int) const override { return (fx::q15)(env_ >> 16); }
+
     WavsynthParams params;
 
 private:

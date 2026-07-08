@@ -69,6 +69,11 @@ public:
     // create a voice for the instrument (caller owns)
     audio::Voice* make_voice(uint8_t instrument_id);
 
+    // push current params into an already-sounding voice of this instrument
+    // (live tweak on held notes). returns true if the voice was refreshed.
+    // caller must hold the mixer audio lock.
+    bool refresh_voice_params(audio::Voice* v, uint8_t instrument_id);
+
     // === clone (lsdj/m8-style "make unique copy") ===
     // a slot is FREE when it has no content AND nothing references it
     // (an empty phrase can legitimately be used as a rest).
