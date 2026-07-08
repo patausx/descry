@@ -456,10 +456,27 @@ void App::update_song(const InputState& in) {
         return;
     }
 
-    if (in.up)    song_row_ = (song_row_ - 1 + seq::SONG_ROWS) % seq::SONG_ROWS;
-    if (in.down)  song_row_ = (song_row_ + 1) % seq::SONG_ROWS;
-    if (in.left)  song_col_ = (song_col_ - 1 + seq::NUM_TRACKS) % seq::NUM_TRACKS;
-    if (in.right) song_col_ = (song_col_ + 1) % seq::NUM_TRACKS;
+    // === ZL+LEFT/RIGHT = flip the song view orientation ===
+    // vertical M8-style list <-> horizontal DAW-style timeline (DoubleSprattt).
+    // same data, same cursor - just rotated axes.
+    if (in.held_zl && (in.left || in.right)) {
+        song_timeline_ = !song_timeline_;
+        return;
+    }
+
+    // dpad nav: in timeline mode the axes rotate with the view -
+    // left/right walk time (song rows), up/down hop tracks (lanes).
+    if (song_timeline_) {
+        if (in.left)  song_row_ = (song_row_ - 1 + seq::SONG_ROWS) % seq::SONG_ROWS;
+        if (in.right) song_row_ = (song_row_ + 1) % seq::SONG_ROWS;
+        if (in.up)    song_col_ = (song_col_ - 1 + seq::NUM_TRACKS) % seq::NUM_TRACKS;
+        if (in.down)  song_col_ = (song_col_ + 1) % seq::NUM_TRACKS;
+    } else {
+        if (in.up)    song_row_ = (song_row_ - 1 + seq::SONG_ROWS) % seq::SONG_ROWS;
+        if (in.down)  song_row_ = (song_row_ + 1) % seq::SONG_ROWS;
+        if (in.left)  song_col_ = (song_col_ - 1 + seq::NUM_TRACKS) % seq::NUM_TRACKS;
+        if (in.right) song_col_ = (song_col_ + 1) % seq::NUM_TRACKS;
+    }
 
     // === live mode: Y = queue the chain under the cursor on its track (launches
     // on the next 16-step bar), X = queue a stop for the track. same press again
@@ -504,7 +521,9 @@ void App::edit_value(int delta) {
             const uint8_t sr = project_.song.scale_root;
             int v;
             if (step.note == seq::EMPTY) {
-                v = seq::scale_snap(st, sr, 60);
+                // sticky entry (m8-style): an empty step takes the LAST note you
+                // entered, not a hardcoded C4 - melodies build way faster.
+                v = seq::scale_snap(st, sr, last_note_entered_);
             } else if (delta == 1 || delta == -1) {
                 v = seq::scale_step(st, sr, step.note, delta);
                 if (v == (int)step.note && delta < 0) v = -1;   // bottom of scale -> clear
@@ -516,6 +535,7 @@ void App::edit_value(int delta) {
             else step.note = (uint8_t)v;
             // if editing a note for the first time - set instrument 0
             if (step.instrument == seq::EMPTY) step.instrument = cur_inst_;
+            if (step.note != seq::EMPTY) last_note_entered_ = step.note;
             break;
         }
         case 1: {
@@ -799,6 +819,8 @@ void App::draw_chain(Draw& d) {
 }
 
 void App::draw_song(Draw& d) {
+    if (song_timeline_) { draw_song_timeline(d); return; }
+
     constexpr int Y0 = 22;
     constexpr int ROW_H = 11;
     constexpr int VISIBLE = 18;
@@ -916,6 +938,110 @@ void App::draw_song(Draw& d) {
             uint8_t br = breathe_pulse(frame_, 64);
             ui::Color cur = lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br);
             d.corner_brackets(cx, y - 1, 14, 10, cur, 3, 1);
+        }
+    }
+}
+
+// === horizontal song timeline (M01D/DAW mental model) ===
+// tracks are horizontal lanes, time flows left to right. same song data and
+// cursor as the vertical list - ZL+LEFT/RIGHT flips between the two.
+// per-track playheads drift independently (polymeter is VISIBLE here).
+void App::draw_song_timeline(Draw& d) {
+    constexpr int Y0      = 22;    // column-number header line
+    constexpr int LX      = 26;    // lanes start x (track labels live left of it)
+    constexpr int CELL_W  = 17;
+    constexpr int COLS    = 22;    // 26 + 22*17 = 400
+    constexpr int LANE_Y0 = 34;
+    constexpr int LANE_H  = 23;    // 8 lanes -> 34..218
+
+    // window of song rows around the cursor
+    int left_col = song_row_ - COLS / 2;
+    if (left_col < 0) left_col = 0;
+    if (left_col > seq::SONG_ROWS - COLS) left_col = seq::SONG_ROWS - COLS;
+
+    // === playhead trail bookkeeping (same cache as the vertical view) ===
+    for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+        const auto& tps = player_.track_state(t);
+        uint16_t cur = (tps.playing && tps.song_mode_) ? (uint16_t)tps.song_row : 0xFFFF;
+        if (cur != song_ph_row_[t]) {
+            song_ph_prev_[t]  = song_ph_row_[t];
+            song_ph_row_[t]   = cur;
+            song_ph_frame_[t] = frame_;
+        }
+    }
+
+    // column stripes (every 16th row) + header numbers (every 4th)
+    for (int c = 0; c < COLS; ++c) {
+        int row = left_col + c;
+        int x = LX + c * CELL_W;
+        if ((row & 0xF) == 0)
+            d.rect(x - 2, LANE_Y0 - 2, CELL_W, seq::NUM_TRACKS * LANE_H + 2, pal::BG_HI);
+        if ((row & 3) == 0)
+            d.hex2(x, Y0, (uint8_t)(row & 0xFF), pal::FG_DIM);
+    }
+    d.text(2, Y0, "##", pal::HEADER);
+
+    for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+        int ly = LANE_Y0 + t * LANE_H;
+        // lane separator
+        d.rect(0, ly - 1, 400, 1, with_alpha(pal::GRID, 60));
+        // track label + live-queue badge
+        char tb[4];
+        std::snprintf(tb, sizeof(tb), "T%d", t);
+        d.text(2, ly + 3, tb, t == song_col_ ? pal::CURSOR : pal::HEADER);
+        uint8_t q = player_.queued(t);
+        if (q != seq::EMPTY) {
+            uint8_t br = breathe_pulse(frame_, 40);
+            ui::Color qc = lerp_color(with_alpha(pal::CURSOR, 140), pal::CURSOR, br);
+            if (q == seq::Player::QUEUE_STOP) d.text(2, ly + 12, "STP", qc, 1);
+            else                              d.hex2(2, ly + 12, q, qc, 1);
+        }
+
+        const auto& tps = player_.track_state(t);
+        for (int c = 0; c < COLS; ++c) {
+            int row = left_col + c;
+            int x = LX + c * CELL_W;
+
+            // ghost trail: the cell the playhead just left fades out
+            if (song_ph_prev_[t] != 0xFFFF && (int)song_ph_prev_[t] == row) {
+                uint32_t age = frame_ - song_ph_frame_[t];
+                if (age < 24) {
+                    uint8_t a = (uint8_t)(150 - age * 150 / 24);
+                    d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PLAY_BG, a));
+                }
+            }
+            // playhead cell + chain progress bar along the bottom edge
+            if (tps.playing && tps.song_mode_ && (int)tps.song_row == row) {
+                d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PLAY_BG, 0xC0));
+                beat_glow(d, x - 2, ly + 1, CELL_W, LANE_H - 2,
+                          frame_ - step_change_frame_, pal::PLAY, 12);
+                int pw = 2 + (int)tps.chain_row * (CELL_W - 2) / (seq::CHAIN_ROWS - 1);
+                d.rect(x - 2, ly + LANE_H - 3, pw, 2, pal::PLAY);
+            }
+
+            uint8_t ch = project_.song.rows[row].chain[t];
+            if (ch == seq::EMPTY) d.text(x, ly + 7, "--", pal::FG_DIM);
+            else                  d.hex2(x, ly + 7, ch, pal::FG);
+
+            if (row == song_row_ && t == song_col_) {
+                uint8_t br = breathe_pulse(frame_, 64);
+                ui::Color cur = lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br);
+                d.corner_brackets(x - 2, ly + 5, 16, 12, cur, 3, 1);
+            }
+        }
+    }
+
+    // bottom strip: view hint + live-mode bar countdown
+    d.text(2, 228, "ZL+< > LIST VIEW", pal::GRID);
+    {
+        bool any_q = false;
+        for (int t = 0; t < seq::NUM_TRACKS; ++t)
+            if (player_.queued(t) != seq::EMPTY) { any_q = true; break; }
+        if (any_q && player_.playing()) {
+            char qb[12];
+            std::snprintf(qb, sizeof(qb), "BAR-%02d", player_.steps_to_bar());
+            uint8_t br = breathe_pulse(frame_, 32);
+            d.text(344, 228, qb, lerp_color(pal::FG_DIM, pal::CURSOR, br));
         }
     }
 }

@@ -103,6 +103,12 @@ void App::touch(int x, int y) {
     }
 
 
+    // instrument bottom panels (tabs at y=90) only own the band BELOW the tab
+    // row. everything above (info line, screen tabs, OCT/REC row) must keep
+    // falling through to the global handlers - otherwise an open panel eats
+    // taps on the screen tabs (DoubleSprattt, issue #2).
+    constexpr int PANEL_BAND_Y = 90;
+
     // === KB/WAVE/SLICE/LOAD/REC tab buttons (Sampler instrument) - check first ===
     if (screen_ == Screen::Instrument &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
@@ -113,15 +119,15 @@ void App::touch(int x, int y) {
     if (screen_ == Screen::Instrument &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::DrumKit) {
         if (kit_tab_touch(x, y)) return;
-        if (kit_panel_ == KitPanel::Gen) {
-            if (gen_panel_touch(x, y)) return;
-            return;   // GEN panel owns the bottom screen - no keyboard fall-through
+        if (kit_panel_ == KitPanel::Gen && y >= PANEL_BAND_Y) {
+            gen_panel_touch(x, y);
+            return;   // GEN panel owns the band below the tabs - no keyboard fall-through
         }
     }
 
     // === WAV loader panel touch (Instrument/Sampler, toggled on) ===
     // tap a row to select it; tap the already-selected row to open/load it.
-    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Load &&
+    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Load && y >= PANEL_BAND_Y &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
         constexpr int PY = 116, LIST_Y = PY + 16, ROW_H = 11, VISIBLE = 9;
         if (wav_count_ > 0 && y >= LIST_Y && y < LIST_Y + VISIBLE * ROW_H) {
@@ -145,21 +151,21 @@ void App::touch(int x, int y) {
     }
 
     // === slice editor panel touch (Instrument/Sampler, toggled on) ===
-    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Slice &&
+    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Slice && y >= PANEL_BAND_Y &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
         slice_panel_touch(x, y, project_.instruments[cur_inst_].sampler.sample_slot, false);
         smp_touch_active_ = true;   // mark so touch_move drags the chop
         return;
     }
     // === WAVE panel touch (Instrument/Sampler): markers + op buttons ===
-    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Wave &&
+    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Wave && y >= PANEL_BAND_Y &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
         wave_panel_touch(x, y, project_.instruments[cur_inst_].sampler.sample_slot, false);
         smp_touch_active_ = true;   // so touch_move keeps dragging markers
         return;
     }
     // === REC panel touch: big arm/stop button (mirrors ZR resample) ===
-    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Rec &&
+    if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Rec && y >= PANEL_BAND_Y &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
         constexpr int BX = 64, BY = 144, BW = 192, BH = 56;
         if (x >= BX && x < BX + BW && y >= BY && y < BY + BH) {
@@ -335,6 +341,7 @@ void App::touch(int x, int y) {
             step.note = (uint8_t)note;
             step.instrument = cur_inst_;
             step.velocity = (uint8_t)touch_vel_;
+            last_note_entered_ = note;   // sticky entry follows live rec too
             // preview the note on the selected track (overrides the current note)
             seq::Player::apply_inst_fx_defaults(project_.instruments[cur_inst_], mixer_.track(rec_track));
             auto* v = project_.make_voice(cur_inst_);
@@ -351,6 +358,7 @@ void App::touch(int x, int y) {
         step.note = (uint8_t)note;
         step.instrument = cur_inst_;
         step.velocity = (uint8_t)touch_vel_;
+        last_note_entered_ = note;   // sticky entry follows the touch keyboard
         cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
     }
 
