@@ -1111,6 +1111,20 @@ bool App::update_fx_section(const InputState& in, seq::Instrument& inst) {
     return true;   // FX focused: consume the frame, suppress normal nav/edit
 }
 
+// live param push: copy the edited instrument's params into every voice that
+// is currently sounding from it - held preview notes AND playing sequencer
+// notes react to edits immediately instead of waiting for the next trigger
+// (DoubleSprattt: "cutoff doesn't change while I'm holding the note").
+// envelopes/phase stay untouched, so this is click-free.
+void App::push_live_inst_params(uint8_t inst_id) {
+    audio::Mixer::LockGuard lg(mixer_);
+    for (int t = 0; t < audio::NUM_TRACKS; ++t) {
+        auto& tr = mixer_.track(t);
+        for (int k = 0; k < audio::TRACK_POLY; ++k)
+            if (tr.voices[k]) project_.refresh_voice_params(tr.voices[k], inst_id);
+    }
+}
+
 void App::update_instrument(const InputState& in) {
     auto& inst = project_.instruments[cur_inst_];
     const bool is_drum = (inst.type == seq::InstrumentType::DrumKit);
@@ -1423,6 +1437,8 @@ post_nav:
                 break;
             }
         }
+        // any param edit -> refresh voices that are already sounding (live tweak)
+        push_live_inst_params(cur_inst_);
     }
 
     // instrument preview
@@ -1477,6 +1493,9 @@ post_nav:
                 note = inst.drumkit.base_note + pad;
             }
             v->note_on(note, 100);
+            // hold-to-sustain: gate stays open while SELECT is held, so the
+            // right hand is free to tweak params with A/B on a sounding note.
+            preview_gate_ = true;
         }
     }
 }
@@ -2152,6 +2171,196 @@ void App::draw_instrument(Draw& d) {
 
     // FX defaults strip (wavsynth / none fall-through)
     draw_fx_section(d, inst);
+}
+
+// === ADSR envelope popup (DoubleSprattt request) ===
+// small window pinned bottom-right of the top screen, shown ONLY while the
+// cursor sits on an envelope param. linear segments - honest: every EG in the
+// engine is linear. the stage being edited glows in the cursor color.
+// serum-style extras: slide-in animation, time grid, and a LIVE dot riding
+// the curve while a note is sounding (ui_env_stage/level voice introspection).
+void App::draw_env_popup(Draw& d, uint32_t atk, uint32_t dec, fx::q15 sus,
+                         uint32_t rel, int focus, const char* title,
+                         int live_stage, fx::q15 live_level) {
+    // slide-in: rises 12px and settles over 6 frames after (re)appearing
+    uint32_t t = frame_ - env_popup_frame_;
+    int dy = (t >= 6) ? 0 : (int)(6 - t) * 2;
+
+    constexpr int PX = 262, PW = 134, PH = 76;
+    const int PY = 142 + dy;
+    d.rect(PX, PY, PW, PH, pal::PANEL);
+    d.corner_brackets(PX, PY, PW, PH, pal::HEADER, 4, 1);
+    d.text(PX + 4, PY + 3, title, pal::HEADER);
+    static const char* stage_names[4] = { "ATK", "DEC", "SUS", "REL" };
+    if (focus >= 0 && focus < 4)
+        d.text(PX + PW - 4 - 18, PY + 3, stage_names[focus], pal::CURSOR);
+
+    // plot area
+    const int X0 = PX + 6, Yt = PY + 15, W = PW - 12, H = PH - 22;
+    const int YB = Yt + H;                        // baseline (env = 0)
+
+    // serum-ish grid: faint verticals every quarter + midline
+    for (int i = 1; i < 4; ++i)
+        d.rect(X0 + W * i / 4, Yt, 1, H, with_alpha(pal::GRID, 70));
+    d.rect(X0, Yt + H / 2, W, 1, with_alpha(pal::GRID, 50));
+
+    // time -> px, saturating around 1s (32000 frames @32k). min 5px so a zero
+    // attack still reads as a stage.
+    auto seg_w = [](uint32_t tt) -> int {
+        return (int)(5 + (uint64_t)tt * 40 / ((uint64_t)tt + 16000));
+    };
+    int wa = seg_w(atk), wd = seg_w(dec), wr = seg_w(rel);
+    int ws = 16;                                  // sustain shelf: fixed
+    int total = wa + wd + wr + ws;
+    wa = wa * (W - ws) / (total - ws);
+    wd = wd * (W - ws) / (total - ws);
+    wr = W - ws - wa - wd;
+    int ys = YB - (int)((uint64_t)sus * H / fx::Q15_ONE);
+
+    // draw a linear segment as 1px columns connected vertically (no line prim)
+    auto seg = [&](int x0, int y0, int x1, int y1, bool hot) {
+        Color c = hot ? pal::CURSOR : pal::PLAY;
+        int n = x1 - x0; if (n < 1) n = 1;
+        int prev = y0;
+        for (int i = 0; i <= n; ++i) {
+            int x = x0 + i;
+            int y = y0 + (y1 - y0) * i / n;
+            int a = y < prev ? y : prev;
+            int b = y < prev ? prev : y;
+            d.rect(x, a, 1, b - a + 1, c);
+            if (hot && a > Yt) d.rect(x, a - 1, 1, 1, c);   // 2px when focused
+            prev = y;
+        }
+    };
+    // sustain level guide (dotted)
+    for (int x = X0; x < X0 + W; x += 4)
+        d.rect(x, ys, 2, 1, pal::GRID);
+
+    int x = X0;
+    const int xa = x, xd = x + wa, xs = x + wa + wd, xr = x + wa + wd + ws;
+    seg(xa, YB, xd, Yt,     focus == 0);   // attack
+    seg(xd, Yt, xs, ys,     focus == 1);   // decay
+    seg(xs, ys, xr, ys,     focus == 2);   // sustain
+    seg(xr, ys, X0 + W, YB, focus == 3);   // release
+    // gate-off tick at the sustain/release seam
+    d.rect(xr, Yt, 1, H, with_alpha(pal::FG_DIM, 120));
+
+    // === LIVE dot: current env position while a note sounds ===
+    // stage: 1=atk 2=dec 3=sus 4=rel. y comes straight from the level (always
+    // exact); x is derived from the level's progress inside the stage.
+    if (live_stage >= 1 && live_stage <= 4) {
+        int32_t lv = live_level; if (lv < 0) lv = 0; if (lv > fx::Q15_ONE) lv = fx::Q15_ONE;
+        int lx;
+        switch (live_stage) {
+            case 1:  // attack: 0 -> ONE
+                lx = xa + (int)((int64_t)wa * lv / fx::Q15_ONE);
+                break;
+            case 2: {  // decay: ONE -> sus
+                int32_t span = fx::Q15_ONE - (int32_t)sus;
+                int32_t p = span > 0 ? (fx::Q15_ONE - lv) * 100 / span : 100;
+                if (p < 0) p = 0; if (p > 100) p = 100;
+                lx = xd + wd * p / 100;
+                break;
+            }
+            case 3:  // sustain shelf: park mid-shelf
+                lx = xs + ws / 2;
+                break;
+            default: {  // release: level -> 0 (approx from sustain as reference)
+                int32_t ref = sus > 0 ? sus : fx::Q15_ONE;
+                int32_t p = 100 - (int32_t)((int64_t)lv * 100 / ref);
+                if (p < 0) p = 0; if (p > 100) p = 100;
+                lx = xr + wr * p / 100;
+                break;
+            }
+        }
+        int ly = YB - (int)((int64_t)lv * H / fx::Q15_ONE);
+        if (lx < X0) lx = X0; if (lx > X0 + W - 1) lx = X0 + W - 1;
+        if (ly < Yt) ly = Yt; if (ly > YB) ly = YB;
+        // glow halo + bright core (breathing slightly)
+        uint8_t br = breathe_pulse(frame_, 24);
+        d.rect(lx - 2, ly - 2, 5, 5, with_alpha(pal::CURSOR, (uint8_t)(60 + (br >> 2))));
+        d.rect(lx - 1, ly - 1, 3, 3, pal::FLASH);
+        // level readout tick on the right edge
+        d.rect(X0 + W + 1, ly, 3, 2, pal::FLASH);
+    }
+}
+
+// dispatcher: decide from the cursor position whether an envelope is being
+// edited and which stage has focus. called after draw_instrument (on top).
+void App::draw_env_overlay(Draw& d) {
+    const auto& inst = project_.instruments[cur_inst_];
+
+    // find the freshest sounding voice of this instrument (preview track 0
+    // first, then sequencer tracks) - powers the live dot on the curve.
+    auto live = [&](int idx, int& st, fx::q15& lv) {
+        st = -1; lv = 0;
+        for (int t = 0; t < audio::NUM_TRACKS; ++t) {
+            auto& tr = mixer_.track(t);
+            for (int k = 0; k < audio::TRACK_POLY; ++k) {
+                auto* v = tr.voices[k];
+                if (!v || !v->active() || v->inst_id != cur_inst_) continue;
+                int s = v->ui_env_stage(idx);
+                if (s > 0) { st = s; lv = v->ui_env_level(idx); return; }
+            }
+        }
+    };
+
+    bool shown = false;
+    int st; fx::q15 lv;
+    switch (inst.type) {
+        case seq::InstrumentType::Wavsynth:
+            // basic layout rows 2..5 = ATK/DEC/SUS/REL
+            if (inst_row_ >= 2 && inst_row_ <= 5) {
+                shown = true; env_anim_latch();
+                live(0, st, lv);
+                draw_env_popup(d, inst.wavsynth.attack, inst.wavsynth.decay,
+                               inst.wavsynth.sustain, inst.wavsynth.release,
+                               inst_row_ - 2, "ENV", st, lv);
+            }
+            break;
+        case seq::InstrumentType::Sampler:
+            if (inst_panel_ == InstPanel::Kb &&
+                (inst_row_ == SR_ATTACK || inst_row_ == SR_RELEASE)) {
+                shown = true; env_anim_latch();
+                live(0, st, lv);
+                // sampler carries a full ADSR in params (editor exposes A/R;
+                // D/S default to 0/ONE) - draw the real thing
+                draw_env_popup(d, inst.sampler.attack, inst.sampler.decay,
+                               inst.sampler.sustain, inst.sampler.release,
+                               inst_row_ == SR_ATTACK ? 0 : 3, "ENV", st, lv);
+            }
+            break;
+        case seq::InstrumentType::FmSynth:
+            // op rows 6..9, sub-cols 3..6 = ATK/DEC/SUS/REL of that operator
+            if (inst_row_ >= 6 && inst_row_ <= 9 && inst_col_ >= 3 && inst_col_ <= 6) {
+                shown = true; env_anim_latch();
+                const auto& op = inst.fm.ops[inst_row_ - 6];
+                live(inst_row_ - 6, st, lv);
+                char t[10];
+                std::snprintf(t, sizeof(t), "OP%d ENV", inst_row_ - 5);
+                draw_env_popup(d, op.attack, op.decay,
+                               (fx::q15)((int)op.sustain * fx::Q15_ONE / 127),
+                               op.release, inst_col_ - 3, t, st, lv);
+            }
+            break;
+        case seq::InstrumentType::DsnSynth:
+            if (inst_row_ >= DR_EG1_A && inst_row_ <= DR_EG1_R) {
+                shown = true; env_anim_latch();
+                live(0, st, lv);
+                draw_env_popup(d, inst.dsn.eg1_attack, inst.dsn.eg1_decay,
+                               inst.dsn.eg1_sustain, inst.dsn.eg1_release,
+                               inst_row_ - DR_EG1_A, "EG1", st, lv);
+            } else if (inst_row_ >= DR_EG2_A && inst_row_ <= DR_EG2_R) {
+                shown = true; env_anim_latch();
+                live(1, st, lv);
+                draw_env_popup(d, inst.dsn.eg2_attack, inst.dsn.eg2_decay,
+                               inst.dsn.eg2_sustain, inst.dsn.eg2_release,
+                               inst_row_ - DR_EG2_A, "EG2", st, lv);
+            }
+            break;
+        default: break;
+    }
+    if (!shown) env_popup_on_ = false;   // popup hidden - rearm the slide-in
 }
 
 } // namespace trackr::ui

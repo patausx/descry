@@ -42,6 +42,7 @@ struct InputState {
     bool held_l = false;
     bool held_r = false;
     bool held_zl = false;   // ZL held - modifier for copy/paste (ZL+X / ZL+Y)
+    bool held_select = false;   // SELECT held - sustains the preview note (gate)
 
     // === analog sticks (new3ds): left circle pad + right C-stick ===
     // normalized to -1000..+1000 (after deadzone). 0 = center/at rest.
@@ -109,6 +110,7 @@ public:
 private:
     // drawing of individual screens
     void draw_song(Draw& d);
+    void draw_song_timeline(Draw& d);   // horizontal DAW-style lane view (toggle: ZL+left/right)
     void draw_chain(Draw& d);
     void draw_phrase(Draw& d);
     void draw_instrument(Draw& d);
@@ -142,6 +144,20 @@ private:
     void edit_sampler_row(synth::SamplerParams& sp, seq::Instrument& inst, int delta);
     // edit one row of the DSN instrument param list.
     void edit_dsn_row(synth::DsnSynthParams& dp, seq::Instrument& inst, int delta);
+    // push edited instrument params into all live voices of that instrument
+    // (held preview notes + playing sequencer notes react to edits instantly).
+    void push_live_inst_params(uint8_t inst_id);
+    // ADSR envelope popup: pops over the instrument view while the cursor is on
+    // an envelope param (wavsynth/sampler/FM op/DSN EG1+EG2). draws the curve
+    // with the edited stage highlighted.
+    void draw_env_overlay(Draw& d);
+    // (re)start the popup slide-in when it first appears after being hidden
+    void env_anim_latch() {
+        if (!env_popup_on_) { env_popup_on_ = true; env_popup_frame_ = frame_; }
+    }
+    void draw_env_popup(Draw& d, uint32_t atk, uint32_t dec, fx::q15 sus,
+                        uint32_t rel, int focus, const char* title,
+                        int live_stage = -1, fx::q15 live_level = 0);
     // per-instrument FX defaults section: navigation/edit (inst_fx_col_) and drawing.
     // shared across all instrument types. returns true if FX handled the input.
     bool update_fx_section(const InputState& in, seq::Instrument& inst);
@@ -315,7 +331,13 @@ private:
     // touch keyboard
     int     octave_ = 4;            // from 0 to 8
     int     last_kb_note_ = -1;     // last played note (for highlighting)
+    int     last_note_entered_ = 60; // sticky note entry: A on empty step inserts THIS (m8-style)
     int     touch_held_note_ = -1;  // note while the finger is held (for sustain)
+    bool    preview_gate_ = false;  // SELECT preview held: gate off on release (hold-to-sustain)
+    bool    song_timeline_ = false; // song view orientation: false = vertical list, true = horizontal timeline
+    // env popup slide-in animation: frame the popup (re)appeared + visibility latch
+    uint32_t env_popup_frame_ = 0;
+    bool     env_popup_on_    = false;
     uint32_t pad_flash_frame_ = 0;  // frame of the last pad hit (press-flash anim)
     // bottom input mode: piano keyboard / 4x4 performance pads / KAOSS XY pad.
     // cycled by the KEYS->PADS->KAOSS button (and its touch hotspot).

@@ -218,6 +218,8 @@ void App::update(const InputState& in) {
 
     // select = preview note under cursor (trigger this instrument).
     // on FX-cmd columns SELECT opens the FX help picker instead (update_phrase).
+    // HOLD-TO-SUSTAIN: the note gates off when SELECT is released, so you can
+    // hold a note one-handed while tweaking params (DoubleSprattt request).
     if (in.select_ && screen_ == Screen::Phrase &&
         cursor_col_ != 3 && cursor_col_ != 5 && cursor_col_ != 7) {
         const auto& step = project_.phrases[cur_phrase_].steps[cursor_row_];
@@ -225,7 +227,14 @@ void App::update(const InputState& in) {
             auto* v = project_.make_voice(step.instrument);
             mixer_.replace_voice(0, v);
             if (v) v->note_on(step.note, step.velocity);
+            preview_gate_ = true;
         }
+    }
+
+    // preview gate release (works from ANY screen - survives screen switches)
+    if (preview_gate_ && !in.held_select) {
+        mixer_.note_off_all(0);
+        preview_gate_ = false;
     }
 
     switch (screen_) {
@@ -611,7 +620,7 @@ void App::draw_top(Draw& d) {
         case Screen::Phrase:     draw_phrase(d); break;
         case Screen::Chain:      draw_chain(d); break;
         case Screen::Song:       draw_song(d); break;
-        case Screen::Instrument: draw_instrument(d); break;
+        case Screen::Instrument: draw_instrument(d); draw_env_overlay(d); break;
         case Screen::Table:      draw_table(d); break;
         case Screen::Mixer:      draw_mixer(d); break;
         case Screen::Project:    draw_project(d); break;
