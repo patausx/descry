@@ -171,6 +171,30 @@ struct SampleFileHeader {
 static_assert(sizeof(SampleFileHeader) == 16, "sample header layout");
 constexpr uint32_t SAMPLE_FILE_MAGIC = 0x53335254;  // 'TR3S' little-endian
 
+// === sample dirty tracking ===
+// exit autosave used to rewrite EVERY non-empty sample to SD - multi-MB of
+// FAT writes = the "15 seconds to close" complaint. hashing RAM is ~1000x
+// faster than SD i/o, so we fingerprint each slot at load/save time and skip
+// unchanged slots on exit. 0 = "no fingerprint yet" (always writes).
+static uint32_t g_sample_hash[synth::SAMPLE_BANK_SIZE] = {0};
+
+static uint32_t sample_fingerprint(const synth::Sample& s) {
+    uint32_t h = 2166136261u;
+    auto mix = [&h](const void* p, std::size_t n) {
+        const uint8_t* b = (const uint8_t*)p;
+        for (std::size_t i = 0; i < n; ++i) { h ^= b[i]; h *= 16777619u; }
+    };
+    mix(&s.channels,   sizeof(s.channels));
+    mix(&s.root_note,  sizeof(s.root_note));
+    mix(&s.reversed,   sizeof(s.reversed));
+    mix(&s.loop_start, sizeof(s.loop_start));
+    mix(&s.loop_end,   sizeof(s.loop_end));
+    mix(s.chops, sizeof(s.chops));
+    mix(s.data.data(), s.data.size() * sizeof(int16_t));
+    uint32_t r = h ^ (uint32_t)s.data.size();
+    return r ? r : 1;   // reserve 0 for "no fingerprint"
+}
+
 static void save_sample_to_sd(int slot) {
     auto& s = synth::SampleBank::instance().slot(slot);
     if (s.data.empty()) return;
@@ -192,6 +216,7 @@ static void save_sample_to_sd(int slot) {
     std::fwrite(s.chops, sizeof(s.chops), 1, f);
     std::fwrite(s.data.data(), sizeof(int16_t), s.data.size(), f);
     std::fclose(f);
+    g_sample_hash[slot] = sample_fingerprint(s);   // written = clean
 }
 
 static void load_sample_from_sd(int slot) {
@@ -234,17 +259,21 @@ static void load_sample_from_sd(int slot) {
         std::fread(s.data.data(), 2, s.data.size(), f);
     }
     std::fclose(f);
+    g_sample_hash[slot] = sample_fingerprint(s);   // freshly loaded = clean
 }
 
 static void save_full_project() {
     mkdir("sdmc:/3ds", 0777);
     mkdir(SAMPLE_DIR, 0777);
     seq::save_project(g_project, SESSION_PATH);
-    // plus all non-empty samples
+    // plus all non-empty samples - but ONLY the ones that actually changed
+    // since load / last save (fingerprint diff). typical exit: zero SD writes
+    // for samples -> app closes near-instantly instead of ~15s.
     for (int i = 0; i < synth::SAMPLE_BANK_SIZE; ++i) {
-        if (!synth::SampleBank::instance().slot(i).data.empty()) {
-            save_sample_to_sd(i);
-        }
+        auto& s = synth::SampleBank::instance().slot(i);
+        if (s.data.empty()) continue;
+        if (sample_fingerprint(s) == g_sample_hash[i]) continue;
+        save_sample_to_sd(i);
     }
 }
 static void load_full_project() {
@@ -571,7 +600,37 @@ int main() {
 
     platform::Audio3DS audio;
     if (!audio.init(g_mixer, player)) {
-        // can't continue - just exit
+        // ndspInit failed. 99% of the time this is a missing DSP firmware dump,
+        // NOT a broken build:
+        //  - emulators (azahar/citra): the virtual SD has no dspfirm.cdc ->
+        //    the DSP service can't start -> apps using ndsp bounce instantly
+        //  - real console: same story if the user never ran a DSP dumper
+        // show a readable screen instead of silently returning to the menu
+        // (github issue #2: "instantly exits/crashes back to the main UI").
+        platform::Draw3DS edraw;
+        for (int f = 0; f < 60 * 60 && aptMainLoop(); ++f) {   // up to ~60s
+            hidScanInput();
+            if (hidKeysDown()) break;
+            C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+            C2D_TargetClear(top, C2D_Color32(10, 10, 14, 255));
+            C2D_SceneBegin(top);
+            int y = 36;
+            edraw.text(24, y, "AUDIO INIT FAILED (NDSP)", ui::pal::RECORD, 2); y += 28;
+            edraw.text(24, y, "descry could not start the 3DS DSP audio service.", ui::pal::FG); y += 12;
+            edraw.text(24, y, "this is almost always a missing DSP firmware dump.", ui::pal::FG); y += 20;
+            edraw.text(24, y, "EMULATOR (AZAHAR / CITRA):", ui::pal::HEADER); y += 12;
+            edraw.text(24, y, " dump dspfirm.cdc from a real 3DS and place it at", ui::pal::FG); y += 12;
+            edraw.text(24, y, " sdmc:/3ds/dspfirm.cdc on the emulated SD card", ui::pal::FG_HEX); y += 20;
+            edraw.text(24, y, "REAL CONSOLE:", ui::pal::HEADER); y += 12;
+            edraw.text(24, y, " run the DSP1 homebrew once to dump the firmware", ui::pal::FG); y += 24;
+            edraw.text(24, y, "PRESS ANY BUTTON TO EXIT", ui::pal::FG_DIM);
+            C2D_TargetClear(bottom, C2D_Color32(10, 10, 14, 255));
+            C2D_SceneBegin(bottom);
+            C3D_FrameEnd(0);
+        }
+        C2D_Fini();
+        C3D_Fini();
+        ptmuExit();
         gfxExit();
         return 1;
     }
@@ -765,6 +824,7 @@ int main() {
         in.held_l = (held & KEY_L) != 0;
         in.held_r = (held & KEY_R) != 0;
         in.held_zl = (held & KEY_ZL) != 0;   // ZL modifier for copy/paste
+        in.held_select = (held & KEY_SELECT) != 0;   // gate for hold-to-sustain preview
 
         // === SMART L/R TAP ===
         // screens switch ON RELEASE, only if there was no dpad modifier during the hold
