@@ -17,9 +17,9 @@ namespace {
     constexpr int MX_GROOVE = MX_TRACKS + 1;         // col 9
     // master strip rows
     enum { MR_MASTER = 0, MR_DLY_TIME, MR_DLY_FB, MR_DLY_WET, MR_REV_WET,
-           MR_DUCK_SRC, MR_DUCK_REL, MR_ROWS };
+           MR_REV_SIZE, MR_REV_DAMP, MR_DUCK_SRC, MR_DUCK_REL, MR_ROWS };
     static const char* const kMasterRows[MR_ROWS] = {
-        "MST", "DTIM", "DFB", "DWET", "RWET", "DUCK", "DREL"
+        "MST", "DTIM", "DFB", "DWET", "RWET", "RSIZ", "RDMP", "DUCK", "DREL"
     };
 }
 
@@ -39,6 +39,14 @@ static void sync_mixer(seq::Project& p, audio::Mixer& m) {
     m.delay_feedback = (fx::q15)((int)p.song.dly_fb  * fx::Q15_ONE / 255);
     m.delay_wet      = (fx::q15)((int)p.song.dly_wet * fx::Q15_ONE / 255);
     m.reverb_wet     = (fx::q15)((int)p.song.rev_wet * fx::Q15_ONE / 255);
+    // reverb character (Project tail, v12). 0 = legacy file -> defaults matching
+    // the old hardcoded comb values (fb 0.65, damp 30%).
+    {
+        int es = p.rev_size ? p.rev_size : 92;   // 0.50..0.92 comb feedback
+        int ed = p.rev_damp ? p.rev_damp : 85;   // 0..0.9 damping
+        m.reverb.set_room_size((fx::q15)(16384 + es * 54));
+        m.reverb.set_damping((fx::q15)(ed * 115));
+    }
     // duck release: 0..255 -> ~2000..34000 frames (60ms..1.06s @32k)
     m.duck_rel_frames = 2000u + (uint32_t)p.song.duck_rel * 125u;
 }
@@ -96,6 +104,16 @@ void App::update_mixer(const InputState& in) {
             case MR_DLY_FB:   bump(song.dly_fb);     break;
             case MR_DLY_WET:  bump(song.dly_wet);    break;
             case MR_REV_WET:  bump(song.rev_wet);    break;
+            case MR_REV_SIZE:
+                if (!project_.rev_size) project_.rev_size = 92;   // legacy 0 -> default first
+                bump(project_.rev_size);
+                if (!project_.rev_size) project_.rev_size = 1;    // keep out of legacy 0
+                break;
+            case MR_REV_DAMP:
+                if (!project_.rev_damp) project_.rev_damp = 85;
+                bump(project_.rev_damp);
+                if (!project_.rev_damp) project_.rev_damp = 1;
+                break;
             case MR_DUCK_SRC: {
                 // src cycles OFF, T0..T7 (delta sign only - it's an enum not a level)
                 int v = (song.duck_src == 0xFF) ? -1 : song.duck_src;
@@ -309,10 +327,12 @@ void App::draw_mixer(Draw& d) {
         const uint8_t vals[MR_ROWS] = {
             project_.song.master_vol, project_.song.dly_time,
             project_.song.dly_fb, project_.song.dly_wet, project_.song.rev_wet,
+            (uint8_t)(project_.rev_size ? project_.rev_size : 92),
+            (uint8_t)(project_.rev_damp ? project_.rev_damp : 85),
             project_.song.duck_src, project_.song.duck_rel
         };
         for (int r = 0; r < MR_ROWS; ++r) {
-            int y = FADER_Y + 4 + r * 24;
+            int y = FADER_Y + 4 + r * 19;   // 9 rows now - tighter pitch than the old 24
             bool sel = strip_sel && (mixer_row_ == r);
             d.text(MX_X, y, kMasterRows[r], sel ? pal::CURSOR : pal::HEADER);
             constexpr int BW = 30;
@@ -336,7 +356,7 @@ void App::draw_mixer(Draw& d) {
             }
             if (sel) {
                 uint8_t br = breathe_pulse(frame_, 64);
-                d.corner_brackets(MX_X - 3, y - 2, 58, 20,
+                d.corner_brackets(MX_X - 3, y - 2, 58, 18,
                                   lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br), 3, 1);
             }
         }

@@ -8,7 +8,7 @@
 namespace trackr::seq {
 
 constexpr uint32_t PROJECT_MAGIC   = 0x44335254;  // "TR3D" little-endian
-constexpr uint32_t PROJECT_VERSION = 11;  // v11: table_speed tail (v10: sidechain duck)
+constexpr uint32_t PROJECT_VERSION = 12;  // v12: reverb size/damp tail (v11: table_speed)
 // oldest version we can still load (as a struct prefix + zero-filled tail)
 constexpr uint32_t PROJECT_VERSION_MIN = 10;
 

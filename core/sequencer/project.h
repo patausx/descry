@@ -66,6 +66,12 @@ public:
     // project files load as a clean prefix (serialize.cpp zero-fills the tail).
     uint8_t table_speed[MAX_TABLES] = {};
 
+    // v12 tail: global reverb character (0 = legacy file -> use built-in default).
+    // UI writes 1..255. lives in Project (not Song) to keep the serialized prefix
+    // layout intact for older files.
+    uint8_t rev_size = 0;   // comb feedback / room size (0 -> default ~0.65)
+    uint8_t rev_damp = 0;   // feedback lowpass damping  (0 -> default ~30%)
+
     // create a voice for the instrument (caller owns)
     audio::Voice* make_voice(uint8_t instrument_id);
 
