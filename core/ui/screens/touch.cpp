@@ -193,12 +193,14 @@ void App::touch(int x, int y) {
         }
         return;
     }
-    // === KEY: tap the key readout (x 244..310 y<16) = cycle scale type,
-    // ZL held + tap = cycle root note. long lists don't need a menu at 12 items.
+    // === KEY: the readout is "<root> <scale>" at x 244..310 y<16.
+    // tap the root part (left, x<264) = cycle root note, tap the scale part = cycle
+    // scale type. ZL+tap still forces root anywhere (back-compat with the guide).
+    // was: root only via ZL+tap -> "it's stuck at C" (discord). discoverability fix.
     if (y < 16 && x >= 244 && x < 310) {
         auto& song = project_.song;
-        if (mod_zl_) song.scale_root = (song.scale_root + 1) % 12;
-        else         song.scale_type = (song.scale_type + 1) % seq::SCALE_COUNT;
+        if (mod_zl_ || x < 264) song.scale_root = (song.scale_root + 1) % 12;
+        else                    song.scale_type = (song.scale_type + 1) % seq::SCALE_COUNT;
         mark_dirty();
         return;
     }

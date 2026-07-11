@@ -662,7 +662,7 @@ void App::draw_bottom(Draw& d) {
         std::snprintf(hb, sizeof(hb), "BPM%03d GRV%02d SWG%02d",
                       project_.song.bpm, project_.song.groove, project_.song.swing);
         d.text(120, 6, hb, pal::FG_DIM, 1);
-        // KEY readout: tap = cycle scale, ZL+tap = cycle root. accent when active.
+        // KEY readout: tap root part = cycle root, tap scale part = cycle scale.
         char kb2[12];
         std::snprintf(kb2, sizeof(kb2), "%s %s",
                       seq::root_name(project_.song.scale_root),
