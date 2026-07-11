@@ -48,6 +48,7 @@ private:
     bool           initialized_ = false;
     volatile uint32_t xrun_count_ = 0;   // starvation events (see underruns())
     volatile bool  primed_ = false;      // first buffer submitted (gates xrun counting)
+    int stall_cycles_ = 0;               // watchdog: cycles with buffers queued but channel silent
 };
 
 } // namespace trackr::platform

@@ -210,6 +210,33 @@ void Audio3DS::worker_loop() {
             primed_ = true;   // pipeline live - starvation counting is meaningful now
             next_buf_ = (idx + 1) % NUM_BUFFERS;
         }
+
+        // recovery: buffers are queued but the channel is not playing. seen in the
+        // wild as "audio randomly cut out while switching tabs and never came back"
+        // (discord report) - a lost APT resume / dsp glitch leaves the channel
+        // paused or dead while the worker keeps feeding it. first try a gentle
+        // unpause; if the channel stays silent, hard re-init it and re-render.
+        if (primed_ && !ndspChnIsPlaying(0)) {
+            ++stall_cycles_;
+            if (stall_cycles_ == 2) {
+                ndspChnSetPaused(0, false);
+            } else if (stall_cycles_ >= 6) {   // ~600ms silent: full channel re-init
+                ndspChnReset(0);
+                ndspChnSetInterp(0, NDSP_INTERP_POLYPHASE);
+                ndspChnSetRate(0, AUDIO_SR);
+                ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
+                float mix[12] = {0};
+                mix[0] = 1.0f; mix[1] = 1.0f;
+                ndspChnSetMix(0, mix);
+                // mark everything DONE - the loop above re-renders + re-adds next cycle
+                for (int n = 0; n < NUM_BUFFERS; ++n)
+                    wave_bufs_[n].status = NDSP_WBUF_DONE;
+                stall_cycles_ = 0;
+                ++xrun_count_;   // make the incident visible in the debug readout
+            }
+        } else {
+            stall_cycles_ = 0;
+        }
     }
 }
 
