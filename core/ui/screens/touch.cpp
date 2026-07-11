@@ -96,6 +96,12 @@ void App::touch(int x, int y) {
         return;
     }
 
+    // === in-app HELP overlay owns ALL touches while open ===
+    if (help_on_) {
+        help_touch(x, y);
+        return;
+    }
+
     // === FX help picker owns the bottom screen while open ===
     if (screen_ == Screen::Phrase && fx_help_) {
         if (fx_help_touch(x, y)) return;
@@ -239,6 +245,12 @@ void App::touch(int x, int y) {
             screen_ = (Screen)idx;
             screen_change_frame_ = frame_;
         }
+        return;
+    }
+
+    // === hint strip (y44..62): tap = open the in-app manual ("?" badge) ===
+    if (y >= 44 && y < 63) {
+        open_help();
         return;
     }
 

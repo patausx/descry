@@ -23,6 +23,9 @@ void App::update(const InputState& in) {
     // mirror held modifiers for the bottom-screen hint bar
     mod_l_ = in.held_l; mod_r_ = in.held_r; mod_zl_ = in.held_zl;
 
+    // === in-app HELP overlay owns all input while open ===
+    if (help_on_) { update_help(in); return; }
+
     // === LIVE STICK MODULATION (synced with the KAOSS pad) ===
     // LEFT stick = the kaoss pad on a stick: X/Y drive the same two assigned
     // destinations (kaoss_dest_x_/y_) and honor the TRK/ALL target toggle.
@@ -678,6 +681,12 @@ void App::draw_bottom(Draw& d) {
         return;
     }
 
+    // === in-app HELP overlay: full-screen manual, replaces the bottom UI ===
+    if (help_on_) {
+        draw_help(d);
+        return;
+    }
+
     // BPM / GRV / SWING - live values to the right of the title
     {
         char hb[40];
@@ -822,6 +831,8 @@ void App::draw_bottom(Draw& d) {
             draw_hints(46, sh, sn, pal::HEADER, pal::FG_DIM);
             draw_hints(55, h_glob, 3, pal::FG_DIM, pal::FG_DIM);
         }
+        // "?" badge: tap the hint strip to open the in-app manual
+        ui_button(d, 302, 45, 14, 16, pal::BG_HI, pal::HEADER, "?", pal::HEADER);
     }
 
     // button helper (tactile: gradient + bevel via ui_button)

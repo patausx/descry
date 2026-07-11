@@ -238,6 +238,17 @@ private:
     void draw_fx_help(Draw& d);
     bool fx_help_touch(int x, int y);
 
+    // === in-app HELP overlay (paginated manual, bottom screen) ===
+    // opened by tapping the hint strip / "?" badge. owns input+touch while on.
+    // implemented in screens/help.cpp; content generated partly from fx.h.
+    bool     help_on_ = false;
+    int      help_page_ = 0;
+    uint32_t help_frame_ = 0;
+    void open_help();
+    void update_help(const InputState& in);
+    void draw_help(Draw& d);
+    bool help_touch(int x, int y);
+
     // === animation layer (frame-based) ===
     uint32_t frame_ = 0;             // grows every tick()
     // held-modifier mirror for the bottom-screen hint bar (set in update())

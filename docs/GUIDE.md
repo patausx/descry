@@ -7,6 +7,12 @@ engine, the full FX command set, performance tools, sampling, and the SD layout.
 descry needs a **new** 3ds/2ds. everything below assumes you launched
 `descry.3dsx` from the homebrew launcher (or the .cia from the home menu).
 
+> **in-app manual:** tap the **`?` badge** (or anywhere on the hotkey hint
+> strip) on the bottom screen — an 8-page compressed version of this guide
+> opens right on the console: basics, global keys, phrase editing,
+> instruments, the full FX list, performance and sampling. d-pad or tap to
+> flip pages, B to close.
+
 ---
 
 ## 1. first beat in five minutes
@@ -204,7 +210,9 @@ autosave writes `session.tr3d` on exit.
 
 the `TYPE` row cycles: none → wavsynth → sampler → drumkit → fm → dsn.
 every engine has a preset row/field — presets load values *and* rename the
-instrument, then you tweak from there. all engines share `TABLE` (mod table
+instrument, then you tweak from there. **preset 1 is always `INIT`** — a true
+blank patch for building sounds from scratch (the other presets are finished
+timbres, not starting points). all engines share `TABLE` (mod table
 slot) and `POLY` (mono = new note releases the old, poly = up to 4 voices
 stack).
 
@@ -212,9 +220,9 @@ stack).
 
 classic waves with unison/detune. rows: `TYPE / OSC/SL / ATTACK / DECAY /
 SUSTN / RELS / TABLE / POLY`. the `OSC/SL` row is one big knob over the whole
-palette: first the 16 built-in presets —
+palette: first the 17 built-in presets —
 
-`SAW LEAD · SUB BASS · PLUCK · PAD · ORGAN · STAB · BASS · BELL · CHIP ·
+`INIT · SAW LEAD · SUB BASS · PLUCK · PAD · ORGAN · STAB · BASS · BELL · CHIP ·
 SWEEP · NOISE · DRONE · WARM PAD · GLASS PAD · DEEP DRONE · SHIMMER`
 
 — then your **user wavetables**. drop single-cycle WAVs into
@@ -231,8 +239,9 @@ column). the algorithm diagram is drawn live on screen. op ratios come from a
 fixed table (0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16); waves
 are SIN/TRI/SAW/SQR; feedback 0..7 on op1.
 
-presets: `EP · BASS · LEAD · BELL · BRASS · PLUCK · ORGAN · PAD · STAB ·
-WOOD · WAH · ICE`.
+presets: `INIT · EP · BASS · LEAD · BELL · BRASS · PLUCK · ORGAN · PAD · STAB ·
+WOOD · WAH · ICE`. `INIT` is DX7-style init voice: one plain sine carrier,
+ops 2-4 silent.
 
 ### sampler
 
@@ -297,8 +306,9 @@ are full ADSR with signed routes to pitch and cutoff; both MGs (LFOs) have
 4 waves and signed depths. `PORTA` = glide, `VCA` toggles gate/EG mode,
 `DRIVE` = soft saturation.
 
-presets: `ACID · HOOVER · SYNC · SUB · PWM · STRNGS · LEAD · PLUCK · WOBBLE ·
-TREM · ZAP · WIND · KICK · SNARE · HAT · TOM`. the last four are analog drum
+presets: `INIT · ACID · HOOVER · SYNC · SUB · PWM · STRNGS · LEAD · PLUCK ·
+WOBBLE · TREM · ZAP · WIND · KICK · SNARE · HAT · TOM`. `INIT` = single saw,
+filter open, no modulation. the last four are analog drum
 starting points — pitch-drop sine kick, tri+noise BPF snare, HPF noise hat,
 sine tom. tweak decay/pitch-drop to taste.
 
