@@ -151,6 +151,14 @@ void Sampler::note_on(int note, int velocity) {
                    s.loop_end <= total;
     loop_start_ = s.loop_start;
     loop_end_   = s.loop_end;
+    // no explicit loop points set -> loop the whole play window (m8 behaviour).
+    // FWDLOOP/REVLOOP used to silently do nothing until the user dragged loop
+    // markers in the WAVE panel - "the loop feature is just broken" (discord).
+    if (want_loop && !loop_active_ && play_end_ > play_start_) {
+        loop_start_  = play_start_;
+        loop_end_    = play_end_;
+        loop_active_ = true;
+    }
 
     // pitch ratio via the table + fine cents
     int semis = note - s.root_note;
