@@ -18,6 +18,18 @@ static FmOpParams op(uint8_t r, uint8_t lvl, uint16_t a, uint16_t d, uint8_t s, 
 // ratio_idx -> table: 0=0.5, 1=1.0, 2=1.5, 3=2.0, 4=2.5, 5=3.0, 6=4.0, 7=5.0,
 //                      8=6.0, 9=7.0, 10=8.0, 11=9.0, 12=10, 13=12, 14=14, 15=16
 
+static void preset_init(FmSynthParams& p) {
+    // blank patch, DX7 INIT VOICE style: additive algo, op1 = plain sine
+    // full-on, ops 2-4 silent. a clean canvas to build from scratch.
+    p.algorithm = 6;   // ADD: all carriers, no modulation routing surprises
+    p.feedback  = 0;
+    p.master_volume = 100;
+    p.ops[0] = op(1, 100, 0, 6000, 127, 4000);   // sine carrier, full sustain
+    p.ops[1] = op(1,   0, 0, 6000, 127, 4000);   // silent
+    p.ops[2] = op(1,   0, 0, 6000, 127, 4000);
+    p.ops[3] = op(1,   0, 0, 6000, 127, 4000);
+}
+
 static void preset_ep(FmSynthParams& p) {
     // algo 1 PAIR: 1→2, 3→4 (carriers 2,4)
     // op1 = bell-modulator, op2 = main carrier
@@ -155,6 +167,7 @@ static void preset_ice(FmSynthParams& p) {
 // === dispatcher ===
 const char* fm_preset_name(FmPreset p) {
     switch (p) {
+        case FmPreset::Init:  return "INIT";
         case FmPreset::EP:    return "EP";
         case FmPreset::Bass:  return "BASS";
         case FmPreset::Lead:  return "LEAD";
@@ -173,6 +186,7 @@ const char* fm_preset_name(FmPreset p) {
 
 void fm_load_preset(FmSynthParams& dst, FmPreset p) {
     switch (p) {
+        case FmPreset::Init:  preset_init(dst);  break;
         case FmPreset::EP:    preset_ep(dst);    break;
         case FmPreset::Bass:  preset_bass(dst);  break;
         case FmPreset::Lead:  preset_lead(dst);  break;

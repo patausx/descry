@@ -6,7 +6,8 @@
 namespace trackr::synth {
 
 enum class FmPreset : uint8_t {
-    EP = 0,      // electric piano (Yamaha-style)
+    Init = 0,    // blank patch: single sine carrier (DX7 INIT VOICE style)
+    EP,          // electric piano (Yamaha-style)
     Bass,        // sub-bass with feedback
     Lead,        // sharp synth lead
     Bell,        // tubular bell

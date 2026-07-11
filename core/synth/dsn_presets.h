@@ -6,7 +6,8 @@
 namespace trackr::synth {
 
 enum class DsnPreset : uint8_t {
-    Acid = 0,    // 303-style resonant acid bass
+    Init = 0,    // blank patch: single saw, filter open, no modulation
+    Acid,        // 303-style resonant acid bass
     Hoover,      // rave hoover (pwm + detuned saw, pitch drop-in)
     Sync,        // hard-sync lead with eg2 sweep
     Sub,         // clean sine sub bass

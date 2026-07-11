@@ -13,6 +13,7 @@ namespace {
 
 const char* dsn_preset_name(DsnPreset p) {
     switch (p) {
+        case DsnPreset::Init:    return "INIT";
         case DsnPreset::Acid:    return "ACID";
         case DsnPreset::Hoover:  return "HOOVER";
         case DsnPreset::Sync:    return "SYNC";
@@ -36,6 +37,11 @@ const char* dsn_preset_name(DsnPreset p) {
 void dsn_load_preset(DsnSynthParams& dst, DsnPreset p) {
     dst = DsnSynthParams{};   // reset to defaults, then override
     switch (p) {
+        case DsnPreset::Init:
+            // blank patch: VCO1 saw only, filter wide open, plain EG1 -> VCA.
+            // everything else stays at struct defaults - build from here.
+            dst.balance = 0;
+            break;
         case DsnPreset::Acid:
             // 303: single saw, tight filter env, high res, slight glide
             dst.octave = -1;

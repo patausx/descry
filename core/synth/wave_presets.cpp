@@ -24,6 +24,10 @@ static WavsynthParams mk(WaveShape sh, fx::q15 size,
 
 void wave_load_preset(WavsynthParams& dst, WavePreset p) {
     switch (p) {
+        // INIT: a true blank patch - struct defaults, nothing dialed in.
+        // for people who build every patch from scratch (discord request).
+        case WavePreset::Init:
+            dst = WavsynthParams{}; break;
         // saw lead: instant attack, holds at 70%, medium release
         case WavePreset::SawLead:
             dst = mk(WaveShape::Saw, Q15_ONE, 80, 6000, Q15_ONE*70/100, 6000); break;
@@ -83,6 +87,7 @@ void wave_load_preset(WavsynthParams& dst, WavePreset p) {
 
 const char* wave_preset_name(WavePreset p) {
     switch (p) {
+        case WavePreset::Init:    return "INIT";
         case WavePreset::SawLead: return "SAW LEAD";
         case WavePreset::SubBass: return "SUB BASS";
         case WavePreset::Pluck:   return "PLUCK";

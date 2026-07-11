@@ -6,7 +6,8 @@
 namespace trackr::synth {
 
 enum class WavePreset : uint8_t {
-    SawLead = 0,  // classic saw lead
+    Init = 0,     // blank patch - pure struct defaults (start from scratch)
+    SawLead,      // classic saw lead
     SubBass,      // deep sine sub
     Pluck,        // short triangle pluck
     Pad,          // slow saw pad with a long release
