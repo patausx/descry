@@ -150,7 +150,7 @@ mod tables: 3 FX lanes × 16 rows, looped while a note is alive.
 | key | action |
 | --- | --- |
 | left/right | move across strips |
-| up/down | track strip: fader / duck depth. master strip: MST, DTIM, DFB, DWET, RWET, DUCK, DREL |
+| up/down | track strip: fader / duck depth. master strip: MST, DTIM, DFB, DWET, RWET, RSIZ, RDMP, DUCK, DREL |
 | A / B / X / Y | value ±1 / ±16 |
 | SELECT | mute toggle on a track strip |
 
@@ -166,13 +166,17 @@ the kaoss pad's DEL/REV destinations. if nothing sends, the wet knobs turn
 silence up and down. same idea for the duck: it needs a source track *and*
 non-zero duck depth on the tracks that should dip.
 
+`RSIZ / RDMP` shape the reverb itself: `RSIZ` = room size (comb feedback —
+bigger = longer tail), `RDMP` = damping (higher = darker tail). they apply
+globally and save with the project.
+
 ### project
 
 16 save slots with names.
 
 | key | action |
 | --- | --- |
-| A | load slot |
+| A | load slot (asks to confirm if you have unsaved changes) |
 | Y | save to slot |
 | X | new project |
 | B | delete (press twice to confirm) |
@@ -192,7 +196,7 @@ autosave writes `session.tr3d` on exit.
 | ZR (hold) | mic record |
 | tap DESCRY logo | theme picker (6 themes) |
 | tap BPM readout | tap tempo |
-| tap KEY readout | cycle scale · ZL held: cycle root |
+| tap KEY readout | left half: cycle root · right half: cycle scale |
 
 ---
 
@@ -235,7 +239,9 @@ WOOD · WAH · ICE`.
 two-column param list: `TYPE / SAMPLE / PLAY / SLICE / START / LENGTH` and
 `LOOP-S / LOOP-E / DETUNE / ATK / REL / TABLE`.
 
-- `PLAY` modes: `FWD · REV · FWDLOOP · REVLOOP · REPITCH`.
+- `PLAY` modes: `FWD · REV · FWDLOOP · REVLOOP · REPITCH`. loop modes use the
+  `LOOP-S`/`LOOP-E` markers when set; with no markers they loop the whole
+  play window (`START`..`LEN`).
 - `SLICE`: 0 = whole sample (scroll below 0 to toggle chromatic-slice mode),
   1..16 = play a fixed chop.
 - `DETUNE` = fine tune ±50 cents.
@@ -292,7 +298,9 @@ are full ADSR with signed routes to pitch and cutoff; both MGs (LFOs) have
 `DRIVE` = soft saturation.
 
 presets: `ACID · HOOVER · SYNC · SUB · PWM · STRNGS · LEAD · PLUCK · WOBBLE ·
-TREM · ZAP · WIND`.
+TREM · ZAP · WIND · KICK · SNARE · HAT · TOM`. the last four are analog drum
+starting points — pitch-drop sine kick, tri+noise BPF snare, HPF noise hat,
+sine tom. tweak decay/pitch-drop to taste.
 
 ---
 
@@ -398,8 +406,9 @@ of chains and fire them per track.
 
 ### scale snap
 
-tap the **KEY readout** (top bar of the touchscreen) to cycle the scale, hold
-ZL and tap to cycle the root. 11 scales + off:
+tap the **KEY readout** (top bar of the touchscreen) to change the key: the
+left half of the readout cycles the root note, the right half cycles the
+scale (ZL+tap anywhere also cycles the root). 11 scales + off:
 
 `MAJ · MIN · HRM · MEL · DOR · PHR · LYD · MIX · PMA · PMI · BLU`
 
