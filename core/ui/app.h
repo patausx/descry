@@ -472,6 +472,7 @@ public:
     char slot_status[64] = {0};   // status text at the bottom ("loaded slot 03" etc)
     uint32_t slot_status_frame_ = 0;   // when the status was set (fade-out anim)
     int  proj_confirm_delete_ = -1;   // slot awaiting delete confirmation (-1 = none)
+    int  proj_confirm_load_   = -1;   // slot awaiting load-over-unsaved confirmation (-1 = none)
 
     // === fullscreen scope (performance visualizer) ===
     // toggled from main via held_L + SELECT. when on - the top screen is entirely an oscilloscope

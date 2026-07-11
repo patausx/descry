@@ -69,10 +69,24 @@ void App::update_project(const InputState& in) {
     if (in.left)  { proj_slot_ = (proj_slot_ - 1 + N) % N;    moved = true; }
     if (in.right) { proj_slot_ = (proj_slot_ + 1) % N;        moved = true; }
 
-    // any movement or other action - reset pending delete
-    if (moved || in.a || in.x || in.y) proj_confirm_delete_ = -1;
+    // any movement or other action - reset pending delete / pending load
+    if (moved || in.x || in.y) { proj_confirm_delete_ = -1; proj_confirm_load_ = -1; }
+    if (in.a) proj_confirm_delete_ = -1;
+    if (in.b) proj_confirm_load_   = -1;
 
-    if (in.a) { proj_action_slot = proj_slot_; proj_action = ProjAction::Load; }
+    if (in.a) {
+        // loading over unsaved work nukes it silently - that cost a discord user
+        // a whole track. dirty project -> ask for a second press (delete-style).
+        if (dirty && proj_confirm_load_ != proj_slot_) {
+            proj_confirm_load_ = proj_slot_;
+            std::snprintf(slot_status, sizeof(slot_status),
+                "UNSAVED CHANGES - PRESS A AGAIN TO LOAD");
+            slot_status_frame_ = frame_;
+        } else {
+            proj_confirm_load_ = -1;
+            proj_action_slot = proj_slot_; proj_action = ProjAction::Load;
+        }
+    }
     if (in.y) { proj_action_slot = proj_slot_; proj_action = ProjAction::Save; }
     if (in.x) { proj_action_slot = proj_slot_; proj_action = ProjAction::New; }
     if (in.b) {
@@ -142,12 +156,18 @@ void App::draw_project(Draw& d) {
         bool selected = (i == proj_slot_);
         bool present  = slot_present[i];
         bool confirm  = (i == proj_confirm_delete_);
+        bool confirm_load = (i == proj_confirm_load_);
         Color bg, border;
         if (confirm) {
             // pending delete: pulse the terracotta so it feels alarmed
             uint8_t p = breathe_pulse(frame_, 24);
             bg = lerp_color(0xFF5C3434, 0xFF7C4545, p);
             border = pal::RECORD;
+        } else if (confirm_load) {
+            // pending load-over-unsaved: amber pulse - caution, not alarm
+            uint8_t p = breathe_pulse(frame_, 24);
+            bg = lerp_color(0xFF5C4A28, 0xFF7C6335, p);
+            border = pal::CURSOR;
         } else if (selected) {
             bg = present ? 0xFF675239 : pal::GRID;
             border = pal::CURSOR;
@@ -160,7 +180,7 @@ void App::draw_project(Draw& d) {
         }
         ui_button(d, x, y, CELL_W - 4, CELL_H - 4, bg, border);
         // selected cell gets breathing corner brackets (matches every other view)
-        if (selected && !confirm) {
+        if (selected && !confirm && !confirm_load) {
             uint8_t br = breathe_pulse(frame_, 64);
             Color cur = lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br);
             d.corner_brackets(x - 2, y - 2, CELL_W, CELL_H, cur, 4, 1);
@@ -173,6 +193,9 @@ void App::draw_project(Draw& d) {
         if (confirm) {
             d.text(x + 26, y + 6, "DEL?", pal::FG);
             d.text(x + 6, y + 20, "B=yes move=no", pal::FG_DIM);
+        } else if (confirm_load) {
+            d.text(x + 26, y + 6, "LOAD?", pal::FG);
+            d.text(x + 6, y + 20, "A=yes move=no", pal::FG_DIM);
         } else if (present) {
             // saved project's actual name (truncate to fit ~13 glyphs)
             char nm[15];
