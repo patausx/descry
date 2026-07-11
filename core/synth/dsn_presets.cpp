@@ -25,6 +25,10 @@ const char* dsn_preset_name(DsnPreset p) {
         case DsnPreset::Trem:    return "TREM";
         case DsnPreset::Zap:     return "ZAP";
         case DsnPreset::Wind:    return "WIND";
+        case DsnPreset::Kick:    return "KICK";
+        case DsnPreset::Snare:   return "SNARE";
+        case DsnPreset::Hat:     return "HAT";
+        case DsnPreset::Tom:     return "TOM";
         default: return "?";
     }
 }
@@ -148,6 +152,39 @@ void dsn_load_preset(DsnSynthParams& dst, DsnPreset p) {
             dst.cutoff = q(40); dst.resonance = q(55);
             dst.eg1_attack = 12800; dst.eg1_sustain = q(70); dst.eg1_release = 16000;
             dst.mg1_rate = q(6); dst.mg1_to_cutoff = s(25);   // slow sweep
+            break;
+        // === drum presets (v1.0.3, requested on discord) ===
+        case DsnPreset::Kick:
+            dst.octave = -2;
+            dst.vco1_wave = DsnWave::Sine; dst.balance = 0;
+            dst.cutoff = q(60);
+            dst.eg1_attack = 0; dst.eg1_decay = 3200;  dst.eg1_sustain = 0; dst.eg1_release = 800;
+            dst.eg2_attack = 0; dst.eg2_decay = 1600;  dst.eg2_sustain = 0;
+            dst.eg2_to_pitch = s(60);                  // click + body drop
+            dst.drive = q(30);
+            break;
+        case DsnPreset::Snare:
+            dst.vco1_wave = DsnWave::Tri;
+            dst.vco2_wave = DsnWave::Noise; dst.balance = q(65);
+            dst.vcf_type = 2;                          // BPF = snare body
+            dst.cutoff = q(45); dst.resonance = q(30);
+            dst.eg1_attack = 0; dst.eg1_decay = 2400;  dst.eg1_sustain = 0; dst.eg1_release = 1200;
+            dst.eg2_attack = 0; dst.eg2_decay = 800;   dst.eg2_sustain = 0;
+            dst.eg2_to_pitch = s(25);
+            break;
+        case DsnPreset::Hat:
+            dst.vco1_wave = DsnWave::Noise; dst.balance = 0;
+            dst.vcf_type = 1;                          // HPF = sizzle only
+            dst.cutoff = q(80);
+            dst.eg1_attack = 0; dst.eg1_decay = 800;   dst.eg1_sustain = 0; dst.eg1_release = 320;
+            break;
+        case DsnPreset::Tom:
+            dst.octave = -1;
+            dst.vco1_wave = DsnWave::Sine; dst.balance = 0;
+            dst.cutoff = q(55);
+            dst.eg1_attack = 0; dst.eg1_decay = 4800;  dst.eg1_sustain = 0; dst.eg1_release = 1600;
+            dst.eg2_attack = 0; dst.eg2_decay = 2400;  dst.eg2_sustain = 0;
+            dst.eg2_to_pitch = s(35);
             break;
         default: break;
     }

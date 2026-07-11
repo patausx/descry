@@ -18,6 +18,10 @@ enum class DsnPreset : uint8_t {
     Trem,        // tremolo pad (mg2->vca)
     Zap,         // pitch-drop zap/perc (eg2->pitch)
     Wind,        // filtered noise wash
+    Kick,        // analog kick (sine + eg2 pitch drop)
+    Snare,       // tri + noise through BPF, snappy
+    Hat,         // noise through HPF, tight decay
+    Tom,         // sine tom, medium pitch drop
     NUM_PRESETS
 };
 
