@@ -73,7 +73,12 @@ public:
     bool consume_load_request() { bool v = load_request_; load_request_ = false; return v; }
     bool consume_render_request() { bool v = render_request_; render_request_ = false; return v; }
     bool consume_reset_request() { bool v = reset_request_; reset_request_ = false; return v; }
-    bool rec_mode() const { return rec_mode_; }
+    // touch-keyboard write mode (issue #5: "REC off still records"):
+    // Jam   = preview only, never writes
+    // Write = tracker write mode - notes land at the cursor (phrase view)
+    // Live  = live-record onto the playing step while the transport runs
+    enum class RecMode : uint8_t { Jam = 0, Write, Live };
+    RecMode rec_mode() const { return rec_mode_; }
     int  octave() const { return octave_; }
 
     // where to write the mic recording - depends on the current screen:
@@ -467,7 +472,7 @@ private:
     bool    load_request_ = false;
     bool    render_request_ = false;
     bool    reset_request_ = false;
-    bool    rec_mode_ = false;       // live record mode toggle
+    RecMode rec_mode_ = RecMode::Jam;  // JAM / WRITE / LIVE (touch REC btn cycles)
     bool    recording_now_ = false;  // audio capture live (mic/resample) - red tint
     bool    rec_tint_on_ = false;    // tint currently applied (needs restore)
 

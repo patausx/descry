@@ -26,10 +26,7 @@ static const char* const pg_basics[] = {
     "small parts nested inside bigger ones:",
     "",
     "  SONG > CHAIN > PHRASE (16 steps)",
-    "",
-    "a PHRASE is 16 steps of notes + FX.",
-    "a CHAIN strings phrases into a part.",
-    "the SONG stacks chains on 8 tracks.",
+    "chains string phrases; song stacks 8 trks",
     "",
     "L / R      switch view (or tap the tabs)",
     "START      play: phrase view = this phrase,",
@@ -37,8 +34,11 @@ static const char* const pg_basics[] = {
     "A          place / edit value under cursor",
     "SELECT     preview note (hold = sustain)",
     "",
-    "the top screen shows data, the bottom is",
-    "your keyboard, pads and panels.",
+    "REC btn cycles the touch-keyboard mode:",
+    "  JAM   keys only preview - nothing writes",
+    "  WRT   keys write notes at the cursor",
+    "  LIVE  record onto the playing step",
+    "CLR erases the step (tap-tap-tap = a run).",
     nullptr
 };
 
@@ -134,7 +134,8 @@ static const char* const pg_perform[] = {
     "song view: bottom pads = SOLO toggles.",
     "mixer view: faders, mute (SELECT), master",
     "strip: delay / reverb / duck params.",
-    "REC + play = live-record notes you tap.",
+    "REC btn on LIVE + play = live-record the",
+    "notes you tap; CLR erases the playing step.",
     nullptr
 };
 

@@ -552,8 +552,8 @@ void App::draw_top(Draw& d) {
 
     // play / rec banners (left side of the header, never under the battery/clock).
     // both pulse via frame_ so the state reads at a glance like a transport light.
-    if (rec_mode_) {
-        // blinking red banner — REC takes priority over PLAY
+    if (rec_mode_ == RecMode::Live) {
+        // blinking red banner — LIVE REC takes priority over PLAY
         d.rect(0, 0, 400, 14, pal::RECORD);
         d.text(150, 3, "● REC LIVE ●", pal::FG);
         d.text(4, 3, screen_name(screen_), pal::FG, 1);
@@ -859,18 +859,25 @@ void App::draw_bottom(Draw& d) {
                      kb_alt ? pal::FG : pal::FG_DIM, kb_alt);
         }
 
-        // REC button (live-rec)
-        ui::Color rec_bg     = rec_mode_ ? pal::RECORD : pal::BG_HI;
-        ui::Color rec_border = rec_mode_ ? pal::FG     : pal::FG_DIM;
-        draw_btn(208, 64, 50, 22, "REC", rec_bg, rec_border, rec_mode_);
+        // REC mode cycle button (JAM / WRT / LIVE) - the label IS the mode
+        // indicator now, freeing x264+ for the CLR button (issue #5).
+        {
+            const char* rec_lbl = rec_mode_ == RecMode::Jam  ? "JAM"
+                                : rec_mode_ == RecMode::Write ? "WRT" : "LIVE";
+            ui::Color rec_bg     = rec_mode_ == RecMode::Live ? pal::RECORD
+                                 : rec_mode_ == RecMode::Write ? pal::HEADER : pal::BG_HI;
+            ui::Color rec_border = rec_mode_ == RecMode::Jam ? pal::FG_DIM : pal::FG;
+            draw_btn(208, 64, 50, 22, rec_lbl, rec_bg, rec_border, rec_mode_ != RecMode::Jam);
+        }
 
-        // mode indicator
-        if (screen_ == Screen::Phrase && !rec_mode_) {
-            d.text(264, 72, "WRITE", pal::CURSOR);
-        } else if (rec_mode_) {
-            d.text(264, 72, "LIVE!", pal::RECORD);
-        } else {
-            d.text(264, 72, "PREV", pal::FG_DIM);
+        // CLR: erase the step under the cursor (WRITE) / the playing step (LIVE).
+        // dim in JAM mode - nothing to erase when keys don't write.
+        {
+            bool can_clr = rec_mode_ != RecMode::Jam &&
+                           (screen_ == Screen::Phrase || player_.playing());
+            draw_btn(264, 64, 52, 22, "CLR",
+                     can_clr ? pal::BG_HI : pal::PANEL,
+                     can_clr ? pal::RECORD : pal::GRID);
         }
     }
 
@@ -932,7 +939,7 @@ void App::draw_bottom(Draw& d) {
         d.rect(0, KB_Y - 4, 320, 1, pal::HEADER);
     }
 
-    if (screen_ == Screen::Song && !rec_mode_ && kb_mode_ != KbMode::Kaoss) {
+    if (screen_ == Screen::Song && rec_mode_ != RecMode::Live && kb_mode_ != KbMode::Kaoss) {
         // === song view: LIVE TRACK PADS v2 ===
         // mute moved to the mixer faders; these pads are now the stage view:
         // tap = SOLO toggle (solo the track, everything else muted).
@@ -1325,7 +1332,7 @@ void App::tick() {
         uint8_t b = breathe_pulse(frame_, 42);
         pal::apply_record_tint((uint8_t)(140 + (b * 100) / 255));   // 140..240
         rec_tint_on_ = true;
-    } else if (rec_mode_) {
+    } else if (rec_mode_ == RecMode::Live) {
         pal::apply_theme(theme_idx);
         pal::apply_record_tint(70);                     // armed: gentle warm shift
         rec_tint_on_ = true;

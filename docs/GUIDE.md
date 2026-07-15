@@ -31,7 +31,8 @@ a hands-on quickstart. exact buttons, no theory.
    to the song key) and the instrument column auto-fills with your drumkit
    slot. move down 4 steps, press A again. put hats on every other step. A/B
    nudge the note ±1, X/Y jump ±12 (octave). you can also tap the touch
-   keyboard/pads to enter notes.
+   keyboard/pads to enter notes — tap the `REC` button until it reads `WRT`
+   (write mode) first; in the default `JAM` mode keys only preview.
 4. **put the phrase in a chain.** go to the **chain** view. cursor on row 0,
    press A — the row now points at phrase `00`.
 5. **put the chain in the song.** go to the **song** view. cursor on row 0 of
@@ -428,8 +429,18 @@ are never rewritten — it's an input filter, not a quantizer.
 
 ### recording
 
-the **REC** button on the touchscreen arms live note recording: notes you play
-on the keyboard/pads get written into the playing phrase.
+the **REC** button on the touchscreen cycles the touch-keyboard mode:
+
+- **JAM** (default) — keys and pads only preview. nothing is written. noodle
+  freely over a playing song without leaving fingerprints.
+- **WRT** — tracker write mode: in the phrase view, every key you tap lands at
+  the cursor and the cursor advances one step. the fastest way to key in a line.
+- **LIVE** — with the transport running, notes you play are recorded onto the
+  step that is playing *right now* in the current phrase.
+
+the **CLR** button next to it erases: in WRT it clears the step under the
+cursor and advances (tap-tap-tap wipes a run), in LIVE it clears the currently
+playing step. both are undoable (ZL+B).
 
 ---
 

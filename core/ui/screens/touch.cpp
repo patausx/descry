@@ -88,7 +88,12 @@ void App::touch_move(int x, int y) {
 }
 
 void App::touch(int x, int y) {
-    dirty = true;   // any touch - set the flag (wrote a note/pressed a button/etc)
+    // any touch marks the project dirty (wrote a note / pressed a button...)
+    // EXCEPT a pure JAM-mode preview - jamming must leave no fingerprints
+    // (otherwise noodling over a song triggers the unsaved-changes confirm).
+    // remembered here, restored at the keyboard fall-through if nothing wrote.
+    bool was_dirty = dirty;
+    dirty = true;
 
     // === theme picker overlay owns ALL touches while open ===
     if (theme_menu_) {
@@ -270,14 +275,43 @@ void App::touch(int x, int y) {
             return;
         }
         if (x >= 208 && x < 258) {
-            // REC toggle. REC records notes you PLAY - so if the drumkit GEN
-            // panel is open (no playable surface), flip back to the pads first
+            // REC mode cycle: JAM (preview only) -> WRITE (notes land at the
+            // cursor) -> LIVE (record onto the playing step). issue #5: keys
+            // used to always write in the phrase view - now JAM is the default
+            // and writing is an explicit mode choice.
+            rec_mode_ = (RecMode)(((int)rec_mode_ + 1) % 3);
+            // LIVE records notes you PLAY - so if the drumkit GEN panel is
+            // open (no playable surface), flip back to the pads first
             // (gearmo: "tapping REC in GEN mode has no effect").
-            rec_mode_ = !rec_mode_;
-            if (rec_mode_ && screen_ == Screen::Instrument &&
+            if (rec_mode_ == RecMode::Live && screen_ == Screen::Instrument &&
                 project_.instruments[cur_inst_].type == seq::InstrumentType::DrumKit &&
                 kit_panel_ == KitPanel::Gen) {
                 kit_panel_ = KitPanel::Kb;
+            }
+            return;
+        }
+        if (x >= 264 && x < 316) {
+            // CLR: erase the step the cursor sits on (phrase view), or the step
+            // playing right now in LIVE mode. undo-recorded like R+B.
+            // (issue #5: "i couldn't find the note clear button")
+            if (rec_mode_ == RecMode::Live && player_.playing()) {
+                for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+                    if (player_.track_state(t).playing &&
+                        player_.track_state(t).phrase_id == cur_phrase_) {
+                        int rs = (player_.track_state(t).step - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
+                        snapshot_step(rs); clear_step(rs); commit_step(rs);
+                        edit_flash_frame_ = frame_;
+                        mark_dirty();
+                        return;
+                    }
+                }
+            }
+            if (screen_ == Screen::Phrase) {
+                snapshot_step(cursor_row_); clear_step(cursor_row_); commit_step(cursor_row_);
+                edit_flash_frame_ = frame_;
+                // advance like a write does - tap tap tap erases a run
+                cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
+                mark_dirty();
             }
             return;
         }
@@ -299,7 +333,7 @@ void App::touch(int x, int y) {
 
     // === in song view - live track pads: tap = SOLO toggle ===
     // (mute lives in the mixer faders now; solo is the stage tool)
-    if (screen_ == Screen::Song && !rec_mode_ && y >= 140) {
+    if (screen_ == Screen::Song && rec_mode_ != RecMode::Live && y >= 140) {
         constexpr int PAD_COLS = 4;
         constexpr int PAD_ROWS = 2;
         constexpr int PAD_W = 320 / PAD_COLS;
@@ -338,7 +372,7 @@ void App::touch(int x, int y) {
     pad_flash_frame_ = frame_;           // press-flash animation seed
 
     // === LIVE REC - write to the playing step instead of the cursor ===
-    if (rec_mode_ && player_.playing()) {
+    if (rec_mode_ == RecMode::Live && player_.playing()) {
         // find any track that's playing cur_phrase_
         int rec_track = -1;
         for (int t = 0; t < seq::NUM_TRACKS; ++t) {
@@ -373,12 +407,16 @@ void App::touch(int x, int y) {
             return;
         }
         // nothing is playing - just preview
-    } else if (screen_ == Screen::Phrase) {
-        // normal write mode - write the note at the current cursor position
+    } else if (rec_mode_ == RecMode::Write && screen_ == Screen::Phrase) {
+        // WRITE mode - write the note at the current cursor position.
+        // (JAM skips this - keys only preview, nothing lands in the phrase)
+        snapshot_step(cursor_row_);
         auto& step = project_.phrases[cur_phrase_].steps[cursor_row_];
         step.note = (uint8_t)note;
         step.instrument = cur_inst_;
         step.velocity = (uint8_t)touch_vel_;
+        commit_step(cursor_row_);
+        was_dirty = true;   // a real write - keep the dirty flag through the preview
         last_note_entered_ = note;   // sticky entry follows the touch keyboard
         cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
     }
@@ -386,6 +424,8 @@ void App::touch(int x, int y) {
     // preview the instrument (in non-rec mode or in any view except phrase).
     // apply the instrument's FX defaults to track 0 first - so the preview goes
     // through the same filter/sends/crush as a sequenced note (WYSIWYG).
+    // a preview alone doesn't change the project - restore the dirty flag.
+    dirty = was_dirty;
     seq::Player::apply_inst_fx_defaults(project_.instruments[cur_inst_], mixer_.track(0));
     auto* v = project_.make_voice(cur_inst_);
     mixer_.replace_voice(0, v);
