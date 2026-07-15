@@ -36,21 +36,37 @@ using namespace trackr;
 static const char* SAMPLE_DIR = "sdmc:/3ds/descry";
 static const char* SESSION_PATH = "sdmc:/3ds/descry/session.tr3d";
 static const char* RENDER_PATH = "sdmc:/3ds/descry/render.wav";
-static const char* THEME_PATH = "sdmc:/3ds/descry/theme.cfg";
+static const char* THEME_PATH = "sdmc:/3ds/descry/theme.cfg";      // legacy (v<=1.0.3)
+static const char* SETTINGS_PATH = "sdmc:/3ds/descry/settings.cfg";
 
-// theme persistence: one byte in a tiny cfg file
+// settings persistence: tiny binary blob ('DSC1' + Settings POD).
+// replaces the old one-byte theme.cfg; that file is still read once as a
+// fallback so a 1.0.3 user's theme survives the upgrade.
+static bool load_settings(ui::App::Settings& out) {
+    FILE* f = std::fopen(SETTINGS_PATH, "rb");
+    if (!f) return false;
+    char magic[4] = {0};
+    bool ok = std::fread(magic, 1, 4, f) == 4 &&
+              std::memcmp(magic, "DSC1", 4) == 0 &&
+              std::fread(&out, 1, sizeof(out), f) == sizeof(out);
+    std::fclose(f);
+    return ok;
+}
+static void save_settings(const ui::App::Settings& s) {
+    FILE* f = std::fopen(SETTINGS_PATH, "wb");
+    if (!f) return;
+    std::fwrite("DSC1", 1, 4, f);
+    std::fwrite(&s, 1, sizeof(s), f);
+    std::fclose(f);
+}
+
+// legacy theme persistence (read-only fallback; settings.cfg replaced it)
 static int load_theme_idx() {
     FILE* f = std::fopen(THEME_PATH, "rb");
     if (!f) return 0;
     int c = std::fgetc(f);
     std::fclose(f);
     return (c >= '0' && c <= '9') ? (c - '0') : 0;
-}
-static void save_theme_idx(int i) {
-    FILE* f = std::fopen(THEME_PATH, "wb");
-    if (!f) return;
-    std::fputc('0' + (i % 10), f);
-    std::fclose(f);
 }
 
 static void slot_path(int slot, char* buf, std::size_t n) {
@@ -664,9 +680,14 @@ int main() {
         return boot_step <= BOOT_STEPS;
     };
 
-    // restore the saved theme (before first draw)
-    app.set_theme(load_theme_idx());
-    int last_theme = app.theme_idx;
+    // restore saved settings (before first draw). settings.cfg is the new home;
+    // fall back to the legacy theme.cfg so a 1.0.3 user's theme survives.
+    {
+        ui::App::Settings s;
+        if (load_settings(s)) app.apply_settings(s);
+        else                  app.set_theme(load_theme_idx());
+    }
+    ui::App::Settings last_settings = app.get_settings();
 
     platform::Draw3DS draw;
     EdgeInput edge;
@@ -985,10 +1006,14 @@ int main() {
         // mirror the audio underrun counter for the scope debug footer
         app.debug_xruns = audio.underruns();
 
-        // theme changed via the touch button? persist it (cheap, rare)
-        if (app.theme_idx != last_theme) {
-            last_theme = app.theme_idx;
-            save_theme_idx(last_theme);
+        // settings changed (theme / octave / kb mode / kaoss assigns)? persist.
+        // a few bytes memcmp per frame, a tiny file write only on change.
+        {
+            ui::App::Settings now = app.get_settings();
+            if (std::memcmp(&now, &last_settings, sizeof(now)) != 0) {
+                last_settings = now;
+                save_settings(now);
+            }
         }
 
         // === update system status (battery + clock) - once every ~30 frames (0.5s) ===

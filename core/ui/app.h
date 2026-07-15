@@ -536,6 +536,31 @@ public:
         battery_level = batt; battery_charging = charging;
         clock_hour = hour; clock_min = minute;
     }
+
+    // === user settings persisted by main (sdmc settings.cfg) ===
+    // small POD mirror of the "how I left my instrument" state: theme, octave,
+    // keyboard mode, kaoss axis assignments, stick sync. main snapshots it
+    // every frame (memcmp of a few bytes) and writes the file on change.
+    struct Settings {
+        uint8_t theme = 0, octave = 4, kb_mode = 0;
+        uint8_t kaoss_x = 0, kaoss_y = 1, stick_sync = 1;
+    };
+    Settings get_settings() const {
+        Settings s;
+        s.theme = (uint8_t)theme_idx; s.octave = (uint8_t)octave_;
+        s.kb_mode = (uint8_t)kb_mode_;
+        s.kaoss_x = (uint8_t)kaoss_dest_x_; s.kaoss_y = (uint8_t)kaoss_dest_y_;
+        s.stick_sync = stick_sync_ ? 1 : 0;
+        return s;
+    }
+    void apply_settings(const Settings& s) {
+        set_theme(s.theme);
+        octave_ = s.octave <= 8 ? s.octave : 4;
+        kb_mode_ = s.kb_mode < 3 ? (KbMode)s.kb_mode : KbMode::Keys;
+        if (s.kaoss_x < (uint8_t)KaossDest::COUNT) kaoss_dest_x_ = (KaossDest)s.kaoss_x;
+        if (s.kaoss_y < (uint8_t)KaossDest::COUNT) kaoss_dest_y_ = (KaossDest)s.kaoss_y;
+        stick_sync_ = s.stick_sync != 0;
+    }
 private:
 };
 
