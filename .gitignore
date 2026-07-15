@@ -4,8 +4,16 @@ build/
 *.elf
 *.smdh
 *.cia
+*.cci
+*.3ds
 *.map
 *.lst
+
+# python cache (branding/tools scripts)
+__pycache__/
+
+# generated branding intermediates (final assets are committed explicitly)
+branding/wordmark_*.png
 
 # kota project memory / backups (internal)
 .kota/
