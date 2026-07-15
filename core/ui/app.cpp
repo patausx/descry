@@ -311,7 +311,6 @@ void App::draw_master_scope(Draw& d, int x, int y, int w, int h) {
     case 2: { // X-Y - goniometer (lissajous), studio-style:
         // rotated 45deg into mid/side space - mono = vertical needle, stereo
         // width blooms the figure sideways (reverb/detune open it like a flower).
-        // auto-gain keeps the figure filling the field at any master level, and
         // samples are CONNECTED line segments with phosphor decay - a naive
         // dot-per-sample L-vs-R plot reads as "a thin diagonal line", useless.
         const int cx = x + w / 2;
@@ -320,13 +319,30 @@ void App::draw_master_scope(Draw& d, int x, int y, int w, int h) {
         // dim vertical axis = the mono needle's home (mid/side space)
         d.rect(cx, y, 1, h, pal::BG_HI);
 
-        // auto-gain: peak |L|,|R| over the buffer. floor keeps silence/noise
-        // from being amplified into a jumping mess (~ -24 dBFS).
+        // auto-gain with slew: instant peak made the figure JUMP every frame.
+        // fast attack / slow release peak follower = a real scope's range knob
+        // being turned smoothly instead of teleporting. floor ~ -24dBFS keeps
+        // silence from amplifying into noise.
         int32_t peak = 2048;
         for (int i = 0; i < N; ++i) {
             int32_t l = mxr.scope_l[i]; if (l < 0) l = -l; if (l > peak) peak = l;
             int32_t rr = mxr.scope_r[i]; if (rr < 0) rr = -rr; if (rr > peak) peak = rr;
         }
+        if (peak > scope_xy_peak_) scope_xy_peak_ = peak;                       // attack: instant
+        else scope_xy_peak_ -= (scope_xy_peak_ - peak) / 16;                    // release: ~1/16 per frame
+        if (scope_xy_peak_ < 2048) scope_xy_peak_ = 2048;
+        const int32_t g = scope_xy_peak_;
+
+        // QUAD BUDGET: every pixel below is one citro2d object from the SHARED
+        // per-frame pool (top+bottom screens!). unbounded bresenham on hot
+        // transients ate the whole pool and the bottom screen stopped drawing
+        // (the "flickering / everything vanishes" bug). hard caps:
+        //  - budget scales with the field size (strip gets less than fullscreen)
+        //  - overlong segments (transient jumps) get SKIPPED - a real CRT beam
+        //    moving that fast wouldn't light the phosphor anyway.
+        int budget = w * h / 8;                    // fullscreen band ~7k, strip ~780
+        if (budget > 6000) budget = 6000;
+        const int MAX_SEG = (r > 40) ? 48 : 16;    // px; longer jumps = beam blanked
 
         // tiny bresenham - Draw has no line primitive and only this style needs one
         auto seg = [&](int x0, int y0, int x1, int y1, Color c) {
@@ -336,6 +352,7 @@ void App::draw_master_scope(Draw& d, int x, int y, int w, int h) {
             int err = dx - dy;
             for (;;) {
                 d.rect(x0, y0, 1, 1, c);
+                if (--budget <= 0) return;
                 if (x0 == x1 && y0 == y1) break;
                 int e2 = 2 * err;
                 if (e2 > -dy) { err -= dy; x0 += sx; }
@@ -346,20 +363,24 @@ void App::draw_master_scope(Draw& d, int x, int y, int w, int h) {
         const Color mid_c = lerp_color(pal::PLAY_BG, pal::PLAY, 128);
         int ppx = 0, ppy = 0;
         bool first = true;
-        for (int i = 0; i < N; ++i) {
+        for (int i = 0; i < N && budget > 0; ++i) {
             std::size_t idx = (pos + (std::size_t)i) % (std::size_t)N;
             int32_t l = mxr.scope_l[idx], rv = mxr.scope_r[idx];
             // 45deg rotation: X = side (L-R), Y = mid (L+R). sums span 2*peak.
-            int px = cx  + (int)(((l - rv) * r) / (2 * peak));
-            int py = mid - (int)(((l + rv) * r) / (2 * peak));
+            int px = cx  + (int)(((l - rv) * r) / (2 * g));
+            int py = mid - (int)(((l + rv) * r) / (2 * g));
             if (px < x) px = x; if (px >= x + w) px = x + w - 1;
             if (py < y) py = y; if (py >= y + h) py = y + h - 1;
             if (!first) {
-                // phosphor decay: oldest half dim, mid zone medium, newest bright
-                Color c = (i > N - N / 4) ? pal::PLAY
-                        : (i > N / 2)     ? mid_c
-                                          : pal::PLAY_BG;
-                seg(ppx, ppy, px, py, c);
+                int adx = px - ppx; if (adx < 0) adx = -adx;
+                int ady = py - ppy; if (ady < 0) ady = -ady;
+                if (adx + ady <= MAX_SEG) {
+                    // phosphor decay: oldest half dim, mid zone medium, newest bright
+                    Color c = (i > N - N / 4) ? pal::PLAY
+                            : (i > N / 2)     ? mid_c
+                                              : pal::PLAY_BG;
+                    seg(ppx, ppy, px, py, c);
+                }   // else: beam blanked on the jump - just move the pen
             }
             ppx = px; ppy = py; first = false;
         }

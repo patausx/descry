@@ -594,7 +594,7 @@ int main() {
     gfxInitDefault();
     irrstInit();   // for the C-stick (right stick on new3ds) - without this irrstCstickRead returns garbage
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
-    C2D_Init(C2D_DEFAULT_MAX_OBJECTS * 4);  // more objects for the bitmap font
+    C2D_Init(C2D_DEFAULT_MAX_OBJECTS * 8);  // bitmap font + X-Y scope trail are quad-hungry
     C2D_Prepare();
 
     C3D_RenderTarget* top    = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);

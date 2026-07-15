@@ -513,6 +513,7 @@ public:
     // 2 X-Y = goniometer/lissajous (mid/side rotated, needs stereo width)
     static constexpr int SCOPE_STYLES = 3;
     int scope_style_ = 0;
+    int32_t scope_xy_peak_ = 2048;   // X-Y auto-gain peak follower (slewed release)
     static const char* scope_style_name(int i) {
         static const char* n[SCOPE_STYLES] = { "WAVE", "BARS", "X-Y" };
         return (i >= 0 && i < SCOPE_STYLES) ? n[i] : "?";
