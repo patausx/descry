@@ -201,7 +201,7 @@ autosave writes `session.tr3d` on exit.
 | L+SELECT | fullscreen oscilloscope |
 | R+SELECT | screenshot (both screens, BMP → SD) |
 | ZR (hold) | mic record |
-| tap DESCRY logo | theme picker (6 themes) + scope style (WAVE / BARS / DOTS / X-Y lissajous) |
+| tap DESCRY logo | theme picker (6 themes) + scope style (WAVE / BARS / X-Y goniometer) |
 | tap BPM readout | tap tempo |
 | tap KEY readout | left half: cycle root · right half: cycle scale |
 

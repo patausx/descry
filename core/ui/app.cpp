@@ -308,31 +308,60 @@ void App::draw_master_scope(Draw& d, int x, int y, int w, int h) {
         }
         break;
     }
-    case 2: { // DOTS - bare sample points, airy phosphor look
-        for (int col = 0; col < w; ++col) {
-            int yy = mid - (int)((sample_at(mxr.scope, col) * amp) / 32768);
-            if (yy < y) yy = y;
-            if (yy >= y + h) yy = y + h - 1;
-            d.rect(x + col, yy, 1, 1, pal::PLAY);
-            if ((col & 3) == 0)   // every 4th dot gets a dim halo pixel below
-                d.rect(x + col, yy + 1 < y + h ? yy + 1 : yy, 1, 1, pal::PLAY_BG);
-        }
-        break;
-    }
-    case 3: { // X-Y - lissajous: L vs R phase plot, the analog-lab classic
+    case 2: { // X-Y - goniometer (lissajous), studio-style:
+        // rotated 45deg into mid/side space - mono = vertical needle, stereo
+        // width blooms the figure sideways (reverb/detune open it like a flower).
+        // auto-gain keeps the figure filling the field at any master level, and
+        // samples are CONNECTED line segments with phosphor decay - a naive
+        // dot-per-sample L-vs-R plot reads as "a thin diagonal line", useless.
         const int cx = x + w / 2;
         const int r  = (h / 2 - 1 < w / 2 - 1) ? h / 2 - 1 : w / 2 - 1;
-        // dim crosshair so silence still reads as "scope, not dead panel"
-        d.rect(x, mid, w, 1, pal::BG_HI);
+
+        // dim vertical axis = the mono needle's home (mid/side space)
         d.rect(cx, y, 1, h, pal::BG_HI);
+
+        // auto-gain: peak |L|,|R| over the buffer. floor keeps silence/noise
+        // from being amplified into a jumping mess (~ -24 dBFS).
+        int32_t peak = 2048;
+        for (int i = 0; i < N; ++i) {
+            int32_t l = mxr.scope_l[i]; if (l < 0) l = -l; if (l > peak) peak = l;
+            int32_t rr = mxr.scope_r[i]; if (rr < 0) rr = -rr; if (rr > peak) peak = rr;
+        }
+
+        // tiny bresenham - Draw has no line primitive and only this style needs one
+        auto seg = [&](int x0, int y0, int x1, int y1, Color c) {
+            int dx = x1 - x0; if (dx < 0) dx = -dx;
+            int dy = y1 - y0; if (dy < 0) dy = -dy;
+            int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+            int err = dx - dy;
+            for (;;) {
+                d.rect(x0, y0, 1, 1, c);
+                if (x0 == x1 && y0 == y1) break;
+                int e2 = 2 * err;
+                if (e2 > -dy) { err -= dy; x0 += sx; }
+                if (e2 <  dx) { err += dx; y0 += sy; }
+            }
+        };
+
+        const Color mid_c = lerp_color(pal::PLAY_BG, pal::PLAY, 128);
+        int ppx = 0, ppy = 0;
+        bool first = true;
         for (int i = 0; i < N; ++i) {
             std::size_t idx = (pos + (std::size_t)i) % (std::size_t)N;
-            int px = cx  + (int)(((int32_t)mxr.scope_l[idx] * r) / 32768);
-            int py = mid - (int)(((int32_t)mxr.scope_r[idx] * r) / 32768);
+            int32_t l = mxr.scope_l[idx], rv = mxr.scope_r[idx];
+            // 45deg rotation: X = side (L-R), Y = mid (L+R). sums span 2*peak.
+            int px = cx  + (int)(((l - rv) * r) / (2 * peak));
+            int py = mid - (int)(((l + rv) * r) / (2 * peak));
             if (px < x) px = x; if (px >= x + w) px = x + w - 1;
             if (py < y) py = y; if (py >= y + h) py = y + h - 1;
-            // newest quarter of the trail bright, the rest dim (phosphor decay)
-            d.rect(px, py, 1, 1, (i > N - N / 4) ? pal::PLAY : pal::PLAY_BG);
+            if (!first) {
+                // phosphor decay: oldest half dim, mid zone medium, newest bright
+                Color c = (i > N - N / 4) ? pal::PLAY
+                        : (i > N / 2)     ? mid_c
+                                          : pal::PLAY_BG;
+                seg(ppx, ppy, px, py, c);
+            }
+            ppx = px; ppy = py; first = false;
         }
         break;
     }
@@ -364,8 +393,8 @@ void App::draw_scope_fullscreen(Draw& d) {
     d.rect(0, 0, W, H, pal::BG);
 
     // grid (subtle) - horizontals at 1/4, 3/4 of the master band
-    // (skip for X-Y: the lissajous field draws its own crosshair)
-    if (scope_style_ != 3) {
+    // (skip for X-Y: the goniometer draws its own axis)
+    if (scope_style_ != 2) {
         d.rect(0, 10 + MH / 4,     W, 1, pal::BG_HI);
         d.rect(0, 10 + 3 * MH / 4, W, 1, pal::BG_HI);
         // verticals every 50px
@@ -966,7 +995,7 @@ void App::draw_bottom(Draw& d) {
             d.rect(SCO_X, SCO_Y - 1, SCO_W, 1, bc);
             d.rect(SCO_X, SCO_Y + SCO_H, SCO_W, 1, bc);
         }
-        if (scope_style_ != 3)   // X-Y draws its own crosshair
+        if (scope_style_ != 2)   // X-Y draws its own axis
             d.rect(SCO_X, MIDY, SCO_W, 1, lerp_color(pal::PANEL, pal::FG_DIM, 120));
         draw_master_scope(d, SCO_X, SCO_Y + 1, SCO_W, SCO_H - 2);
     }
@@ -1346,13 +1375,13 @@ void App::draw_theme_menu(Draw& d) {
         int y = py + THM_HDR + n * THM_ROW_H;
         d.rect(THM_X + 4, y - 1, THM_W - 8, 1, pal::GRID);
         d.text(THM_X + 8, y + 8, "SCOPE", pal::HEADER);
-        // the 4 style names in a row - current one boxed + bright
+        // the 3 style names in a row - current one boxed + bright
         for (int s = 0; s < SCOPE_STYLES; ++s) {
-            int sx = THM_X + 70 + s * 44;
+            int sx = THM_X + 76 + s * 58;
             bool on = (s == scope_style_);
             if (on) {
                 uint8_t br = breathe_pulse(frame_, 48);
-                d.rect(sx - 3, y + 4, 40, THM_ROW_H - 10,
+                d.rect(sx - 4, y + 4, 52, THM_ROW_H - 10,
                        lerp_color(with_alpha(pal::PLAY, 50), with_alpha(pal::PLAY, 100), br));
             }
             d.text(sx, y + 8, scope_style_name(s), on ? pal::FG : pal::FG_DIM);
@@ -1375,7 +1404,7 @@ bool App::theme_menu_touch(int x, int y) {
     } else if (row == n) {
         // scope style row: tap a name directly, or anywhere in the row = cycle.
         // menu STAYS open - you want to see the strip react while you pick.
-        int s = (x - (THM_X + 70 - 3)) / 44;
+        int s = (x - (THM_X + 76 - 4)) / 58;
         scope_style_ = (s >= 0 && s < SCOPE_STYLES) ? s
                      : (scope_style_ + 1) % SCOPE_STYLES;
     }

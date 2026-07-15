@@ -510,11 +510,11 @@ public:
     // === scope style (master scope look: strip + fullscreen; lives in the
     // theme picker because it's the same "how descry looks" knob) ===
     // 0 WAVE = filled envelope + line (classic), 1 BARS = mirrored peak bars,
-    // 2 DOTS = sample points, 3 X-Y = lissajous (L vs R, needs stereo width)
-    static constexpr int SCOPE_STYLES = 4;
+    // 2 X-Y = goniometer/lissajous (mid/side rotated, needs stereo width)
+    static constexpr int SCOPE_STYLES = 3;
     int scope_style_ = 0;
     static const char* scope_style_name(int i) {
-        static const char* n[SCOPE_STYLES] = { "WAVE", "BARS", "DOTS", "X-Y" };
+        static const char* n[SCOPE_STYLES] = { "WAVE", "BARS", "X-Y" };
         return (i >= 0 && i < SCOPE_STYLES) ? n[i] : "?";
     }
     // theme picker overlay (bottom screen): opened by tapping the wordmark
