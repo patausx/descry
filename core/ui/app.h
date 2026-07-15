@@ -98,6 +98,10 @@ public:
     // draw the current view on the top screen (400x240)
     void draw_top(Draw& d);
 
+    // master scope renderer - honors scope_style_ (WAVE/BARS/DOTS/X-Y).
+    // shared by the bottom strip and the fullscreen visualizer.
+    void draw_master_scope(Draw& d, int x, int y, int w, int h);
+
     // draw the bottom screen helper (320x240) - status, touch keyboard, debug info
     void draw_bottom(Draw& d);
 
@@ -503,6 +507,16 @@ public:
 
     // === theme (runtime palette switch; persisted by main in a config file) ===
     int theme_idx = 0;
+    // === scope style (master scope look: strip + fullscreen; lives in the
+    // theme picker because it's the same "how descry looks" knob) ===
+    // 0 WAVE = filled envelope + line (classic), 1 BARS = mirrored peak bars,
+    // 2 DOTS = sample points, 3 X-Y = lissajous (L vs R, needs stereo width)
+    static constexpr int SCOPE_STYLES = 4;
+    int scope_style_ = 0;
+    static const char* scope_style_name(int i) {
+        static const char* n[SCOPE_STYLES] = { "WAVE", "BARS", "DOTS", "X-Y" };
+        return (i >= 0 && i < SCOPE_STYLES) ? n[i] : "?";
+    }
     // theme picker overlay (bottom screen): opened by tapping the wordmark
     bool theme_menu_ = false;
     uint32_t theme_menu_frame_ = 0;
@@ -544,6 +558,7 @@ public:
     struct Settings {
         uint8_t theme = 0, octave = 4, kb_mode = 0;
         uint8_t kaoss_x = 0, kaoss_y = 1, stick_sync = 1;
+        uint8_t scope_style = 0;
     };
     Settings get_settings() const {
         Settings s;
@@ -551,6 +566,7 @@ public:
         s.kb_mode = (uint8_t)kb_mode_;
         s.kaoss_x = (uint8_t)kaoss_dest_x_; s.kaoss_y = (uint8_t)kaoss_dest_y_;
         s.stick_sync = stick_sync_ ? 1 : 0;
+        s.scope_style = (uint8_t)scope_style_;
         return s;
     }
     void apply_settings(const Settings& s) {
@@ -560,6 +576,7 @@ public:
         if (s.kaoss_x < (uint8_t)KaossDest::COUNT) kaoss_dest_x_ = (KaossDest)s.kaoss_x;
         if (s.kaoss_y < (uint8_t)KaossDest::COUNT) kaoss_dest_y_ = (KaossDest)s.kaoss_y;
         stick_sync_ = s.stick_sync != 0;
+        scope_style_ = s.scope_style < SCOPE_STYLES ? s.scope_style : 0;
     }
 private:
 };

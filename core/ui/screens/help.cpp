@@ -59,7 +59,7 @@ static const char* const pg_keys[] = {
     "hold a modifier (L / R / ZL) and the hint",
     "bar below shows that modifier's live map.",
     "",
-    "tap DESCRY logo = theme picker",
+    "tap DESCRY logo = theme + scope style",
     "tap BPM readout = tap tempo",
     "tap KEY readout = root / scale cycle",
     nullptr

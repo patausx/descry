@@ -184,6 +184,11 @@ public:
     static constexpr std::size_t SCOPE_SIZE = 512;
     fx::q15 scope[SCOPE_SIZE] = {0};
     std::size_t scope_write_pos = 0;
+    // stereo companion (same decimation/phase as `scope`) - feeds the XY
+    // (lissajous) scope style. mono buffer stays: every other style + the
+    // strip peak logic read it.
+    fx::q15 scope_l[SCOPE_SIZE] = {0};
+    fx::q15 scope_r[SCOPE_SIZE] = {0};
 
     // === resample/bounce capture (recording master output into an internal buffer) ===
     void start_resample(std::size_t max_frames);

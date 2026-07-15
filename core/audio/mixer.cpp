@@ -518,10 +518,12 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
         }
     }
 
-    // scope buffer (mono = (L+R)/2)
+    // scope buffer (mono = (L+R)/2, plus L/R planes for the XY style)
     for (std::size_t i = 0; i < frames; i += 4) {
-        int32_t mono = ((int32_t)out[i*2] + (int32_t)out[i*2 + 1]) / 2;
-        scope[scope_write_pos] = (fx::q15)mono;
+        int32_t l = out[i*2], r = out[i*2 + 1];
+        scope_l[scope_write_pos] = (fx::q15)l;
+        scope_r[scope_write_pos] = (fx::q15)r;
+        scope[scope_write_pos] = (fx::q15)((l + r) / 2);
         scope_write_pos = (scope_write_pos + 1) % SCOPE_SIZE;
     }
 
