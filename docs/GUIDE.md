@@ -471,7 +471,7 @@ everything lives under `sdmc:/3ds/descry/`:
 | `wav/` | your WAVs for the sampler LOAD browser (subfolders work) |
 | `wavetable/` | single-cycle WAVs for the wavsynth USER shape |
 | `screens/` | screenshots (R+SELECT) |
-| `render.wav` | song export |
+| `render.wav` | song export — press **SELECT** in the project view (up to 60 s, 32 kHz stereo) |
 
 ---
 

@@ -89,6 +89,15 @@ void App::update_project(const InputState& in) {
     }
     if (in.y) { proj_action_slot = proj_slot_; proj_action = ProjAction::Save; }
     if (in.x) { proj_action_slot = proj_slot_; proj_action = ProjAction::New; }
+    // SELECT = render the song to sdmc:/3ds/descry/render.wav.
+    // the request flag was orphaned - render_song_to_wav() existed in main,
+    // the help promised it, but no UI path ever set the flag. now it has a home.
+    if (in.select_) {
+        render_request_ = true;
+        std::snprintf(slot_status, sizeof(slot_status),
+            "RENDERING SONG TO render.wav ...");
+        slot_status_frame_ = frame_;
+    }
     if (in.b) {
         if (proj_confirm_delete_ == proj_slot_) {
             // second press on the same slot - confirmed
@@ -117,7 +126,7 @@ void App::draw_project(Draw& d) {
 
     // === header: title + current project banner ===
     d.text(10, 14, "PROJECT", pal::HEADER, 1);
-    d.text(66, 14, "A=LOAD Y=SAVE X=NEW B=DEL(2x)", pal::FG_DIM);
+    d.text(66, 14, "A=LOAD Y=SAVE X=NEW B=DEL(2x) SEL=WAV", pal::FG_DIM);
 
     // current project name line — doubles as rename target when R held
     {

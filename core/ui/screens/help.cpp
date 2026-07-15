@@ -154,7 +154,7 @@ static const char* const pg_files[] = {
     "  wav/         your samples (subfolders ok)",
     "  wavetable/   single-cycle waves (USER osc)",
     "  screens/     screenshots (R+SELECT)",
-    "  render.wav   song export",
+    "  render.wav   song export (PRJ view: SELECT)",
     "",
     "projects autosave on exit; the PRJ view",
     "shows a NOW banner + dirty marker.",

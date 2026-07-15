@@ -774,7 +774,7 @@ void App::draw_bottom(Draw& d) {
         static const H h_inst[]  = {{"A/B/X/Y","edit"},{"ZL+SEL","fx row"}};
         static const H h_tbl[]   = {{"A/B/X/Y","edit"},{"SEL","hear"}};
         static const H h_mix[]   = {{"A/B/X/Y","vol"},{"SEL","mute"}};
-        static const H h_prj[]   = {{"A","load"},{"Y","save"},{"X","new"},{"B","del 2x"}};
+        static const H h_prj[]   = {{"A","load"},{"Y","save"},{"X","new"},{"B","del 2x"},{"SEL","wav"}};
         static const H h_glob[]  = {{"L/R","view"},{"START","play"},{"ZL/L/R","hold=combos"}};
         // modifier maps
         static const H h_zl[] = {{"X","copy"},{"Y","paste"},{"B","undo"},{"A","redo"},{"SEL","sel/clone"},{"UD","len"}};
@@ -826,7 +826,7 @@ void App::draw_bottom(Draw& d) {
                 case Screen::Instrument: sh = h_inst;  sn = 2; break;
                 case Screen::Table:      sh = h_tbl;   sn = 2; break;
                 case Screen::Mixer:      sh = h_mix;   sn = 2; break;
-                default:                 sh = h_prj;   sn = 4; break;
+                default:                 sh = h_prj;   sn = 5; break;
             }
             draw_hints(46, sh, sn, pal::HEADER, pal::FG_DIM);
             draw_hints(55, h_glob, 3, pal::FG_DIM, pal::FG_DIM);

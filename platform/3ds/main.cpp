@@ -918,7 +918,10 @@ int main() {
         if (app.consume_render_request()) {
             // pause realtime audio briefly, render, resume
             // (realtime audio uses g_mixer and the live player, render has its own xmix/xplayer - no conflict)
-            render_song_to_wav();
+            bool ok = render_song_to_wav();
+            std::snprintf(app.slot_status, sizeof(app.slot_status),
+                          ok ? "rendered -> 3ds/descry/render.wav"
+                             : "RENDER FAILED (empty song?)");
         }
 
         // === project menu actions ===
