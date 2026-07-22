@@ -249,10 +249,9 @@ void App::update(const InputState& in) {
         cursor_col_ != 3 && cursor_col_ != 5 && cursor_col_ != 7) {
         const auto& step = project_.phrases[cur_phrase_].steps[cursor_row_];
         if (step.note != seq::EMPTY && step.instrument != seq::EMPTY) {
-            auto* v = project_.make_voice(step.instrument);
-            mixer_.replace_voice(0, v);
-            if (v) v->note_on(step.note, step.velocity);
-            preview_gate_ = true;
+            if (mixer_.start_voice(0, project_.make_voice(step.instrument),
+                                   step.note, step.velocity))
+                preview_gate_ = true;
         }
     }
 

@@ -68,9 +68,7 @@ void App::update_table(const InputState& in) {
     // player during playback) - the assignment is the real payload here.
     if (in.select_) {
         project_.instruments[cur_inst_].table_id = cur_table_;
-        auto* v = project_.make_voice(cur_inst_);
-        mixer_.replace_voice(0, v);
-        if (v) v->note_on(60, 110);
+        mixer_.start_voice(0, project_.make_voice(cur_inst_), 60, 110);
         dirty = true;
     }
 }

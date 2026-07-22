@@ -244,37 +244,48 @@ static void load_sample_from_sd(int slot) {
     long bytes = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
     if (bytes <= 0 || bytes > 32 * 1024 * 1024) { std::fclose(f); return; }
-    auto& s = synth::SampleBank::instance().slot(slot);
+    // decode into a TEMP sample: SD I/O stays outside the audio lock, and the
+    // audio thread may be reading the live slot's data vector right now -
+    // resize/fread in place is a use-after-free under a playing voice.
+    synth::Sample tmp;
 
     // peek magic
     SampleFileHeader h{};
     std::fread(&h, sizeof(h), 1, f);
     if (h.magic == SAMPLE_FILE_MAGIC && h.version == 1) {
         // new format with a header
-        std::fread(s.chops, sizeof(s.chops), 1, f);
-        long header_bytes = (long)sizeof(h) + (long)sizeof(s.chops);
+        std::fread(tmp.chops, sizeof(tmp.chops), 1, f);
+        long header_bytes = (long)sizeof(h) + (long)sizeof(tmp.chops);
         long audio_bytes = bytes - header_bytes;
         if (audio_bytes <= 0) { std::fclose(f); return; }
-        s.channels   = h.channels ? h.channels : 1;
-        s.root_note  = h.root_note;
-        s.reversed   = (h.flags & 1) != 0;
-        s.loop_start = h.loop_start;
-        s.loop_end   = h.loop_end;
-        s.data.resize(audio_bytes / 2);
-        std::fread(s.data.data(), 2, s.data.size(), f);
+        tmp.channels   = h.channels ? h.channels : 1;
+        tmp.root_note  = h.root_note;
+        tmp.reversed   = (h.flags & 1) != 0;
+        tmp.loop_start = h.loop_start;
+        tmp.loop_end   = h.loop_end;
+        tmp.data.resize(audio_bytes / 2);
+        std::fread(tmp.data.data(), 2, tmp.data.size(), f);
     } else {
         // legacy: raw mono int16, without metadata
         std::fseek(f, 0, SEEK_SET);
-        s.channels   = 1;
-        s.root_note  = 60;
-        s.loop_start = 0;
-        s.loop_end   = 0;
-        s.reversed   = false;
-        for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) s.chops[i] = 0xFFFFFFFFu;
-        s.data.resize(bytes / 2);
-        std::fread(s.data.data(), 2, s.data.size(), f);
+        tmp.channels   = 1;
+        tmp.root_note  = 60;
+        tmp.loop_start = 0;
+        tmp.loop_end   = 0;
+        tmp.reversed   = false;
+        for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) tmp.chops[i] = 0xFFFFFFFFu;
+        tmp.data.resize(bytes / 2);
+        std::fread(tmp.data.data(), 2, tmp.data.size(), f);
     }
     std::fclose(f);
+
+    // publish: cut any voice reading this slot, then swap under the lock
+    auto& s = synth::SampleBank::instance().slot(slot);
+    {
+        audio::Mixer::LockGuard _g(g_mixer);
+        g_mixer.cut_slot_voices(slot);
+        s = std::move(tmp);
+    }
     g_sample_hash[slot] = sample_fingerprint(s);   // freshly loaded = clean
 }
 
@@ -293,7 +304,15 @@ static void save_full_project() {
     }
 }
 static void load_full_project() {
-    seq::load_project(g_project, SESSION_PATH);
+    // SD read into a heap temp WITHOUT the lock (an SD read under the audio
+    // lock stalls the worker = audible dropout of ringing tails), then swap
+    // the ~62KB into the live project under the lock. caller stops playback.
+    auto* tmp = new (std::nothrow) seq::Project();
+    if (tmp && seq::load_project(*tmp, SESSION_PATH)) {
+        audio::Mixer::LockGuard _g(g_mixer);
+        g_project = *tmp;
+    }
+    delete tmp;
     for (int i = 0; i < synth::SAMPLE_BANK_SIZE; ++i) {
         load_sample_from_sd(i);
     }
@@ -312,7 +331,15 @@ static bool slot_load(int slot) {
     if (slot < 0 || slot >= 16) return false;
     char path[80];
     slot_path(slot, path, sizeof(path));
-    return seq::load_project(g_project, path);
+    // same deal as load_full_project: SD read outside the lock, swap under it
+    auto* tmp = new (std::nothrow) seq::Project();
+    bool ok = tmp && seq::load_project(*tmp, path);
+    if (ok) {
+        audio::Mixer::LockGuard _g(g_mixer);
+        g_project = *tmp;
+    }
+    delete tmp;
+    return ok;
 }
 static void slot_delete(int slot) {
     if (slot < 0 || slot >= 16) return;
@@ -817,13 +844,30 @@ int main() {
         if (mic_ok) {
             if (y_now && !prev_y) {
                 rec_target = app.rec_target_slot();
+                // begin_recording clears + re-reserves the slot's data vector -
+                // any sampler voice still reading it would be use-after-free.
+                // hold the lock across cut+begin so the player can't fire a new
+                // note on this slot in between. (tick() then only appends within
+                // the reservation - the data pointer stays stable - safe.)
+                audio::Mixer::LockGuard _g(g_mixer);
+                g_mixer.cut_slot_voices(rec_target);
                 rec.begin_recording(rec_target);
             } else if (!y_now && prev_y) {
+                // stop_recording rate-corrects (32728->32000) by SWAPPING the
+                // slot's data vector - same UAF class as destructive edits.
+                // cut readers + hold the lock for the swap. tick() can also
+                // hit the auto-stop path internally, so it sits under the same
+                // guard (its normal appends are within reserve - cheap).
+                audio::Mixer::LockGuard _g(g_mixer);
+                g_mixer.cut_slot_voices(rec_target);
                 rec.stop_recording();
                 if (rec_target >= 0) app.on_rec_done(rec_target);
                 rec_target = -1;
             }
-            rec.tick();
+            {
+                audio::Mixer::LockGuard _g(g_mixer);
+                rec.tick();
+            }
         }
         prev_y = y_now;
 
@@ -926,7 +970,13 @@ int main() {
 
         // handle save/load by flags from the ui
         if (app.consume_save_request()) { save_full_project(); app.dirty = false; }
-        if (app.consume_load_request()) { load_full_project(); app.dirty = false; }
+        if (app.consume_load_request()) {
+            // never load over a running sequencer: the player walks phrase/
+            // chain/instrument data every tick on the worker thread
+            if (player.playing()) player.stop();
+            load_full_project();
+            app.dirty = false;
+        }
         if (app.consume_reset_request()) {
             // stop playback, zero the project, restart the demo
             if (player.playing()) player.stop();
@@ -952,6 +1002,7 @@ int main() {
             if (app.consume_proj_action(slot, act)) {
                 switch (act) {
                     case ui::App::ProjAction::Load:
+                        if (player.playing()) player.stop();   // see consume_load_request
                         if (slot_load(slot)) {
                             std::snprintf(app.slot_status, sizeof(app.slot_status),
                                           "loaded slot %02X", slot);

@@ -67,6 +67,30 @@ void Mixer::replace_voice(int i, Voice* new_voice) {
     t.voice_age[slot] = ++age_counter_;
 }
 
+Voice* Mixer::start_voice(int i, Voice* v, int note, int velocity) {
+    if (!v) return nullptr;
+    LockGuard _g(*this);
+    // note_on FIRST: replace_voice publishes the pointer to the audio thread,
+    // which deletes any voice whose render() reports inactive. an un-started
+    // voice published first = window for use-after-free on the note_on below.
+    v->note_on(note, velocity);
+    replace_voice(i, v);
+    return v;
+}
+
+void Mixer::cut_slot_voices(int sample_slot) {
+    LockGuard _g(*this);
+    for (auto& t : tracks_) {
+        for (int s = 0; s < TRACK_POLY; ++s) {
+            if (t.voices[s] && t.voices[s]->current_sample_slot() == sample_slot) {
+                delete t.voices[s];
+                t.voices[s] = nullptr;
+                t.voice_age[s] = 0;
+            }
+        }
+    }
+}
+
 Voice* Mixer::primary_voice(int i) {
     LockGuard _g(*this);
     auto& t = tracks_[i];
@@ -373,11 +397,15 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
                     t.tscope[t.tscope_pos] = (fx::q15)(((int32_t)sample_l + sample_r) / 2);
                     t.tscope_pos = (t.tscope_pos + 1) % TrackState::TSCOPE_SIZE;
                 }
-                // peak meter (abs max of both channels)
-                fx::q15 al = sample_l < 0 ? (fx::q15)-sample_l : sample_l;
-                fx::q15 ar = sample_r < 0 ? (fx::q15)-sample_r : sample_r;
-                if (al > peak) peak = al;
-                if (ar > peak) peak = ar;
+                // peak meter (abs max of both channels). int32 math: negating
+                // INT16_MIN inside q15 wraps back to -32768 and a full-scale
+                // peak would read as silence.
+                int32_t al = sample_l < 0 ? -(int32_t)sample_l : sample_l;
+                int32_t ar = sample_r < 0 ? -(int32_t)sample_r : sample_r;
+                if (al > 32767) al = 32767;
+                if (ar > 32767) ar = 32767;
+                if ((fx::q15)al > peak) peak = (fx::q15)al;
+                if ((fx::q15)ar > peak) peak = (fx::q15)ar;
                 // sends: the clean pan'ed signal into each bus (q31 - doesn't clip from 8 tracks)
                 if (t.send_del > 0) {
                     del_bus_l_[i] += fx::mul_q15(sample_l, t.send_del);

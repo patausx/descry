@@ -112,7 +112,17 @@ public:
     // add a voice to a track. finds a free slot, otherwise steals oldest active.
     // the stolen voice is removed (with a possible click - acceptable for voice stealing).
     // takes ownership of new_voice.
+    // NOTE: the voice must already be note_on()'d (active) BEFORE this call -
+    // once published, the audio thread may render it at any moment, and an
+    // inactive voice gets deleted after one render pass (use-after-free for
+    // any pointer the caller kept). prefer start_voice() from UI code.
     void replace_voice(int i, Voice* new_voice);
+
+    // safe preview trigger: note_on() the voice, THEN publish it, all under the
+    // audio lock. handles v == nullptr. this is the only correct order - see
+    // the replace_voice() comment. returns v for optional further tweaking
+    // (only touch it while you can guarantee it hasn't been stolen/deleted!).
+    Voice* start_voice(int i, Voice* v, int note, int velocity);
 
     // primary voice = the most recent active voice of the track (for UI: current_frame, sample_slot)
     Voice* primary_voice(int i);
@@ -125,6 +135,14 @@ public:
 
     // remove ALL voices of the track (cleanup)
     void clear_voices(int i);
+
+    // hard-delete every voice (on any track) currently reading `sample_slot`.
+    // MUST be called (under the audio lock) before destructively editing or
+    // reloading a bank slot: a sampler voice keeps raw pointers into
+    // Sample::data across render calls - a vector realloc/clear underneath it
+    // is a use-after-free. instant cut, no fade: sample editing is not a
+    // performance path.
+    void cut_slot_voices(int sample_slot);
 
     // reset master DSP state (DC blocker, per-track filter state, reverb tail counter)
     void reset_master_state() {

@@ -585,6 +585,13 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
         uint32_t efr = sfr + (((uint64_t)sp.length * total) >> 15);
         // data-index range (frames * channels) for the fade ops
         uint32_t da = sfr * s.channels, db = efr * s.channels;
+        // audio-thread safety: a sampler voice reads s.data across renders and
+        // trim/reverse can realloc the vector under it (use-after-free). cut
+        // every voice on this slot and hold the lock for the whole edit - a
+        // destructive edit is not a performance path, one clipped buffer is
+        // infinitely better than heap corruption.
+        audio::Mixer::LockGuard _g(mixer_);
+        mixer_.cut_slot_voices(slot);
         switch (i) {
             case 0: synth::sample_normalize(s); break;
             case 1: synth::sample_reverse(s);   break;
@@ -772,13 +779,17 @@ int App::gen_drum_to_pad(int pad, int drum_type) {
         inst.drumkit.slots[pad] = (uint8_t)slot;
     }
     auto& s = synth::SampleBank::instance().slot(slot);
-    synth::generate_drum(s, (synth::DrumType)drum_type);
+    {
+        // the pad may be re-generated while its previous sound still rings -
+        // generate_drum resizes s.data under any live voice (UAF). cut first.
+        audio::Mixer::LockGuard _g(mixer_);
+        mixer_.cut_slot_voices(slot);
+        synth::generate_drum(s, (synth::DrumType)drum_type);
+    }
     mark_dirty();
 
     // instant preview: hear what landed on the pad
-    auto* v = project_.make_voice(cur_inst_);
-    mixer_.replace_voice(0, v);
-    if (v) v->note_on(inst.drumkit.base_note + pad, 110);
+    mixer_.start_voice(0, project_.make_voice(cur_inst_), inst.drumkit.base_note + pad, 110);
     return slot;
 }
 
@@ -962,12 +973,21 @@ void App::load_panel_input(const InputState& in, int slot) {
             wav_scanned_ = false;   // rescan the new folder
             return;
         }
-        // load the .wav into this sampler's slot
+        // load the .wav into this sampler's slot.
+        // decode to a TEMP sample first (SD I/O must stay outside the audio
+        // lock), then swap into the bank under the lock with the slot's voices
+        // cut - the old vector dies here and any live reader would be UAF.
         char path[200];
         std::snprintf(path, sizeof(path), "%s/%s", curdir, wav_files_[wav_sel_]);
         constexpr int MAX_FRAMES = 32000 * 15;     // 15 sec hard cap
-        auto r = synth::load_wav_to_sample(path, s, 32000, MAX_FRAMES);
+        synth::Sample tmp;
+        auto r = synth::load_wav_to_sample(path, tmp, 32000, MAX_FRAMES);
         if ((int)r >= 0) {
+            {
+                audio::Mixer::LockGuard _g(mixer_);
+                mixer_.cut_slot_voices(slot);
+                s = std::move(tmp);
+            }
             mark_dirty();
             inst_panel_ = InstPanel::Kb;   // close panel on success
         }
@@ -1483,16 +1503,13 @@ post_nav:
     }
 
     if (in.select_) {
-        auto* v = project_.make_voice(cur_inst_);
-        mixer_.replace_voice(0, v);
-        if (v) {
-            int note = 60;
-            if (is_drum) {
-                // play the pad the cursor is on (or base_note if at the top)
-                int pad = (inst_row_ >= 3) ? (inst_row_ - 3) : 0;
-                note = inst.drumkit.base_note + pad;
-            }
-            v->note_on(note, 100);
+        int note = 60;
+        if (is_drum) {
+            // play the pad the cursor is on (or base_note if at the top)
+            int pad = (inst_row_ >= 3) ? (inst_row_ - 3) : 0;
+            note = inst.drumkit.base_note + pad;
+        }
+        if (mixer_.start_voice(0, project_.make_voice(cur_inst_), note, 100)) {
             // hold-to-sustain: gate stays open while SELECT is held, so the
             // right hand is free to tweak params with A/B on a sounding note.
             preview_gate_ = true;

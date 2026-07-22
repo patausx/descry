@@ -78,9 +78,7 @@ void App::touch_move(int x, int y) {
             last_kb_note_ = note;
             touch_held_note_ = note;
             seq::Player::apply_inst_fx_defaults(project_.instruments[cur_inst_], mixer_.track(0));
-            auto* v = project_.make_voice(cur_inst_);
-            mixer_.replace_voice(0, v);
-            if (v) v->note_on(note, touch_vel_);
+            mixer_.start_voice(0, project_.make_voice(cur_inst_), note, touch_vel_);
         }
         return;
     }
@@ -188,9 +186,14 @@ void App::touch(int x, int y) {
                 mixer_.stop_resample();
                 std::size_t frames = mixer_.resample_frames();
                 if (frames > 0) {
-                    auto& s = synth::SampleBank::instance()
-                                  .slot(project_.instruments[cur_inst_].sampler.sample_slot);
+                    int dst_slot = project_.instruments[cur_inst_].sampler.sample_slot;
+                    auto& s = synth::SampleBank::instance().slot(dst_slot);
                     const fx::q15* src = mixer_.resample_data();
+                    // the destination slot may be sounding right now (we literally
+                    // just resampled the playing song) - assign() reallocs the
+                    // vector under any live voice. cut + swap under the lock.
+                    audio::Mixer::LockGuard _g(mixer_);
+                    mixer_.cut_slot_voices(dst_slot);
                     s.data.assign(src, src + frames * 2);
                     s.channels   = 2;
                     s.root_note  = 60;
@@ -399,9 +402,7 @@ void App::touch(int x, int y) {
             last_note_entered_ = note;   // sticky entry follows live rec too
             // preview the note on the selected track (overrides the current note)
             seq::Player::apply_inst_fx_defaults(project_.instruments[cur_inst_], mixer_.track(rec_track));
-            auto* v = project_.make_voice(cur_inst_);
-            mixer_.replace_voice(rec_track, v);
-            if (v) v->note_on(note, touch_vel_);
+            mixer_.start_voice(rec_track, project_.make_voice(cur_inst_), note, touch_vel_);
             // follow the playhead with the cursor so you see where you're writing
             cursor_row_ = rec_step;
             return;
@@ -427,9 +428,7 @@ void App::touch(int x, int y) {
     // a preview alone doesn't change the project - restore the dirty flag.
     dirty = was_dirty;
     seq::Player::apply_inst_fx_defaults(project_.instruments[cur_inst_], mixer_.track(0));
-    auto* v = project_.make_voice(cur_inst_);
-    mixer_.replace_voice(0, v);
-    if (v) v->note_on(note, touch_vel_);
+    mixer_.start_voice(0, project_.make_voice(cur_inst_), note, touch_vel_);
 }
 
 // resolve a touch in the keyboard band to a midi note honoring kb_mode_.
