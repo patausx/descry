@@ -434,13 +434,20 @@ void Player::trigger_step(int track) {
     }
 
     // trigger chance (O command): roll the dice. FF=always, 00=never.
-    if (chance >= 0) {
+    // (FF must short-circuit: roll is 0..255, so 'roll < 255' alone would
+    // still skip 1 step out of 256 on a supposedly-certain trigger.)
+    if (chance >= 0 && chance < 0xFF) {
         uint32_t roll = rng_next() & 0xFF;   // 0..255
         if (roll >= (uint32_t)chance) return;  // failed the roll -> skip this step entirely
     }
 
     if (step.note != EMPTY && step.instrument != EMPTY) {
         int base_note = (int)step.note + ts.transpose + (has_pitch ? fx_pitch : 0);
+        // clamp BEFORE it ever touches a uint8_t: a deep down-transpose could
+        // go negative, and stuffing -1 into delay_note wrapped it to 255 which
+        // later clamped to 127 - a bass note delayed with DLY jumped 10 octaves.
+        if (base_note < 0)   base_note = 0;
+        if (base_note > 127) base_note = 127;
         ts.last_note     = step.note;
         ts.last_inst     = step.instrument;
         ts.last_velocity = step.velocity;
