@@ -10,6 +10,7 @@
 #include "../../core/audio/mixer.h"
 #include "../../core/sequencer/player.h"
 #include <3ds.h>
+#include <atomic>
 
 namespace trackr::platform {
 
@@ -44,10 +45,13 @@ private:
     Thread         worker_handle_ = nullptr;
     RecursiveLock  audio_lock_;          // protects mixer/player from UI<->worker races
     aptHookCookie  apt_cookie_;          // hook for home/sleep/resume
-    volatile bool  thread_run_  = false;
+    // atomics, not volatile: volatile gives no happens-before between the UI
+    // core and the worker core (real dual-core on new3ds). relaxed is enough -
+    // these are independent flags/counters, no data is published through them.
+    std::atomic<bool>     thread_run_{false};
     bool           initialized_ = false;
-    volatile uint32_t xrun_count_ = 0;   // starvation events (see underruns())
-    volatile bool  primed_ = false;      // first buffer submitted (gates xrun counting)
+    std::atomic<uint32_t> xrun_count_{0};   // starvation events (see underruns())
+    std::atomic<bool>     primed_{false};   // first buffer submitted (gates xrun counting)
     int stall_cycles_ = 0;               // watchdog: cycles with buffers queued but channel silent
 };
 

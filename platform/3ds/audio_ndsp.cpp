@@ -73,7 +73,14 @@ bool Audio3DS::init(audio::Mixer& mixer, seq::Player& player) {
     const std::size_t bytes = FRAMES_PER_BUF * 2 * sizeof(int16_t);
     for (int i = 0; i < NUM_BUFFERS; ++i) {
         buf_data_[i] = static_cast<int16_t*>(linearAlloc(bytes));
-        if (!buf_data_[i]) return false;
+        if (!buf_data_[i]) {
+            // unwind: free what we already grabbed + the ndsp session, or a
+            // failed init leaks linear memory and leaves the dsp channel taken
+            // (shutdown() is a no-op while initialized_ == false).
+            for (int k = 0; k < i; ++k) { linearFree(buf_data_[k]); buf_data_[k] = nullptr; }
+            ndspExit();
+            return false;
+        }
         std::memset(buf_data_[i], 0, bytes);
         std::memset(&wave_bufs_[i], 0, sizeof(ndspWaveBuf));
         wave_bufs_[i].data_vaddr = buf_data_[i];
@@ -121,8 +128,20 @@ bool Audio3DS::init(audio::Mixer& mixer, seq::Player& player) {
 
     if (!worker_handle_) {
         // couldn't bring up the worker - we don't fall back to "tick from main loop",
-        // better to explicitly return false so main can fail with a clear error
+        // better to explicitly return false so main can fail with a clear error.
+        // full unwind: hooks, callback, lock binding, buffers, ndsp, cpu limit.
         thread_run_ = false;
+        aptUnhook(&apt_cookie_);
+        ndspSetCallback(nullptr, nullptr);
+        g_wake_event_for_callback = nullptr;
+        g_audio_for_apt_hook      = nullptr;
+        mixer_->set_audio_lock(nullptr);
+        APT_SetAppCpuTimeLimit(10);
+        ndspChnReset(0);
+        for (int i = 0; i < NUM_BUFFERS; ++i) {
+            if (buf_data_[i]) { linearFree(buf_data_[i]); buf_data_[i] = nullptr; }
+        }
+        ndspExit();
         return false;
     }
 
