@@ -113,9 +113,13 @@ void Sampler::note_on(int note, int velocity) {
     params.reverse = want_reverse;
     params.loop    = want_loop;
 
-    // play boundaries from start/length (q15 fractions of total)
+    // play boundaries from start/length (q15 fractions of total).
+    // length is a DURATION from start - matching the UI (waveform markers,
+    // WIN % readout, crop). engine used to read it as an absolute end pos:
+    // START 50 + LENGTH 50 rendered an empty [50%, 50%) window instead of
+    // the second half you saw selected on screen.
     play_start_ = ((uint64_t)params.start  * total) >> 15;
-    uint32_t end_frame = ((uint64_t)params.length * total) >> 15;
+    uint32_t end_frame = play_start_ + (uint32_t)(((uint64_t)params.length * total) >> 15);
     if (end_frame > total) end_frame = total;
     if (play_start_ >= total) play_start_ = total > 0 ? total - 1 : 0;
     play_end_ = end_frame;
@@ -214,7 +218,14 @@ bool Sampler::render(fx::q15* out, std::size_t frames) {
     }
 
     auto& s = SampleBank::instance().slot(params.sample_slot);
-    if (s.empty()) { active_ = false; return false; }
+    if (s.empty()) {
+        // slot vanished mid-note (rec/load into it cut us... or should have).
+        // zero the buffer before bailing: the mixer sums voice_buf_ regardless
+        // of the return value, and a stale buffer here = one chunk of garbage.
+        for (std::size_t i = 0; i < frames * 2; ++i) out[i] = 0;
+        active_ = false;
+        return false;
+    }
 
     uint32_t total = s.num_frames();
 
