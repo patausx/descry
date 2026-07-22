@@ -23,4 +23,11 @@ struct ProjectFileHeader {
 bool save_project(const Project& p, const char* path);
 bool load_project(Project& p, const char* path);
 
+// sanity-check a freshly loaded project before letting the player near it.
+// a corrupted / truncated / hand-edited file must not be able to cause OOB
+// indexing (instrument >= MAX_INSTRUMENTS in a step) or div-by-zero (bpm 0).
+// FIXES anything out of range in place (clamps / resets to safe defaults)
+// and returns the number of fields it had to fix (0 = file was clean).
+int validate_project(Project& p);
+
 } // namespace trackr::seq
