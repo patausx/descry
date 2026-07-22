@@ -47,6 +47,7 @@ private:
     int  slot_ = -1;
     std::size_t max_frames_ = 0;
     std::size_t written_ = 0;
+    int actual_sr_ = SAMPLER_SR;   // what the mic really delivers (3ds: 32728)
 };
 
 } // namespace trackr::synth
