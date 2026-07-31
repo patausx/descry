@@ -131,10 +131,7 @@ void Player::stop() {
         tr.pan        = 0;
         tr.perf_hold  = 0;
     }
-    // clear reverb and delay tails so everything goes silent + DC blocker state
-    mixer_.reverb.reset();
-    std::memset(mixer_.delay_l, 0, sizeof(mixer_.delay_l));
-    std::memset(mixer_.delay_r, 0, sizeof(mixer_.delay_r));
+    // clear all master DSP tails so everything goes silent
     mixer_.reset_master_state();
     any_playing_ = false;
 }

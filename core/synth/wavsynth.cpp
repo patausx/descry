@@ -20,6 +20,8 @@ static void build_sin_lut() {
     g_sin_lut_built = true;
 }
 
+void warmup_wavsynth() { build_sin_lut(); }
+
 // get sin(phase) where phase: 0..65535 = full period
 // linear interpolation between LUT entries
 static inline fx::q15 fast_sin(fx::uq16 phase) {
@@ -34,24 +36,24 @@ static inline fx::q15 fast_sin(fx::uq16 phase) {
 }
 
 // generate a wave sample from phase uq16 (0..0xFFFF = one period)
-// PolyBLEP anti-aliasing for saw/square: smooths the discontinuities in a correct window around the wrap.
-// dt = phase_inc in normalized form (0..1, where 1 = full cycle per sample). our phase_inc is in q16,
-// so dt = phase_inc / 65536. PolyBLEP poly: t in [0,1], scale = dt.
+// integer PolyBLEP: same edge correction as the old double implementation,
+// but no software floating-point/div helpers in the per-oscillator hot path.
 static inline int32_t polyblep_q15(uint32_t phase, uint32_t phase_inc) {
     if (phase_inc == 0) return 0;
-    // t in [0, 1) (normalized phase within the period)
-    double t  = (double)(phase & 0xFFFF) / 65536.0;
-    double dt = (double)phase_inc       / 65536.0;
-    if (dt > 0.5) dt = 0.5;  // at very high frequencies the blep is meaningless
-    double v = 0.0;
+    const uint32_t t = phase & 0xFFFF;
+    const uint32_t dt = phase_inc > 32768 ? 32768 : phase_inc;
     if (t < dt) {
-        double x = t / dt;
-        v = x + x - x * x - 1.0;
-    } else if (t > 1.0 - dt) {
-        double x = (t - 1.0) / dt;
-        v = x * x + x + x + 1.0;
+        int32_t x = (int32_t)(((uint64_t)t << 15) / dt); // q15 [0,1)
+        int32_t x2 = (x * x) >> 15;
+        return (x << 1) - x2 - 32767;
     }
-    return (int32_t)(v * 32767.0);
+    const uint32_t r = 0x10000 - t;
+    if (r <= dt) {
+        int32_t x = -(int32_t)(((uint64_t)r << 15) / dt); // q15 (-1,0]
+        int32_t x2 = (x * x) >> 15;
+        return x2 + (x << 1) + 32767;
+    }
+    return 0;
 }
 
 static fx::q15 sample_wave(WaveShape shape, fx::uq16 phase, fx::q15 /*size*/, uint32_t* noise_state, uint32_t phase_inc, uint8_t user_slot) {
@@ -162,6 +164,35 @@ void Wavsynth::note_off() {
     }
 }
 
+void Wavsynth::refresh_env_rate() {
+    uint32_t duration = 0;
+    int32_t sustain = params.sustain;
+    switch (stage_) {
+        case Stage::Attack:  duration = params.attack;  break;
+        case Stage::Decay:   duration = params.decay;   break;
+        case Stage::Release: duration = params.release; sustain = (int32_t)(release_start_ >> 16); break;
+        default: return;
+    }
+    if (rate_stage_ == stage_ && rate_duration_ == duration && rate_sustain_ == sustain) return;
+    rate_stage_ = stage_;
+    rate_duration_ = duration;
+    rate_sustain_ = sustain;
+    if (stage_ == Stage::Attack) {
+        uint32_t a = duration < 2 ? 2 : duration;
+        env_step_ = (fx::q31)((1LL << 31) / a);
+        env_target_ = (fx::q31)((1LL << 31) - 1);
+    } else if (stage_ == Stage::Decay) {
+        env_target_ = (fx::q31)params.sustain << 16;
+        uint32_t d = duration ? duration : 1;
+        env_step_ = (fx::q31)(((1LL << 31) - env_target_) / d);
+    } else {
+        uint32_t r = duration ? duration : 1;
+        env_target_ = 0;
+        env_step_ = release_start_ / (fx::q31)r;
+        if (env_step_ < 1) env_step_ = 1;
+    }
+}
+
 void Wavsynth::cut() {
     // KIL: ramp the envelope to zero fast (~48 samples = ~1.5ms @ 32kHz) to avoid a
     // click, then deactivate. much faster than the instrument's natural release.
@@ -192,11 +223,8 @@ bool Wavsynth::render(fx::q15* out, std::size_t frames) {
         // advance the envelope
         switch (stage_) {
             case Stage::Attack: {
-                // attack>=2 so (1<<31)/attack fits in int32.
-                // at attack=1 the step = (1<<31)/1 = 2^31 doesn't fit in q31 (max 2^31-1) = UB.
-                // attack=1 and attack=2 are indistinguishable by ear (both nearly instant).
-                uint32_t a = std::max<uint32_t>(params.attack, 2);
-                env_ += (fx::q31)((1LL << 31) / a);
+                refresh_env_rate();
+                env_ += env_step_;
                 if (env_ >= (1LL << 31) - 1 || stage_pos_ >= params.attack) {
                     env_ = (1LL << 31) - 1;
                     stage_ = Stage::Decay;
@@ -205,11 +233,10 @@ bool Wavsynth::render(fx::q15* out, std::size_t frames) {
                 break;
             }
             case Stage::Decay: {
-                fx::q31 target = static_cast<fx::q31>(params.sustain) << 16;
-                fx::q31 step = ((1LL << 31) - target) / std::max<uint32_t>(params.decay, 1);
-                env_ -= step;
-                if (env_ <= target || stage_pos_ >= params.decay) {
-                    env_ = target;
+                refresh_env_rate();
+                env_ -= env_step_;
+                if (env_ <= env_target_ || stage_pos_ >= params.decay) {
+                    env_ = env_target_;
                     // if sustain=0 - go straight to idle (m8-style decay-only env)
                     if (params.sustain == 0) {
                         env_ = 0;
@@ -225,13 +252,9 @@ bool Wavsynth::render(fx::q15* out, std::size_t frames) {
                 env_ = static_cast<fx::q31>(params.sustain) << 16;
                 break;
             case Stage::Release: {
-                // LINEAR release: from release_start_ to 0 in exactly params.release samples.
-                // it used to be exponential env_/release: over `release` steps it only fell to ~37%,
-                // then stage_pos_>=release cut from 37% to 0 = a sharp jump = a rasp (bell/drone).
-                uint32_t rel = std::max<uint32_t>(params.release, 1);
-                fx::q31 step = release_start_ / (fx::q31)rel;
-                if (step < 1) step = 1;   // guarantee it crawls all the way to zero
-                env_ -= step;
+                refresh_env_rate();
+                const uint32_t rel = params.release ? params.release : 1;
+                env_ -= env_step_;
                 if (env_ <= 0 || stage_pos_ >= rel) {
                     env_ = 0;
                     stage_ = Stage::Idle;

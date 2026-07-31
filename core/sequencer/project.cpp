@@ -16,6 +16,10 @@ audio::Voice* Project::make_voice(uint8_t instrument_id) {
         case InstrumentType::Sampler: {
             auto* s = new synth::Sampler();
             s->params = inst.sampler;
+            // the voice can't see Song - hand it the current tempo so beat-sync
+            // (REPITCH) can scale the playback rate. recomputed on every
+            // note_on, so a TPO/tempo change takes effect from the next note.
+            s->params.bar_frames = synth::bar_frames_at_bpm(song.bpm);
             v = s;
             break;
         }
@@ -60,8 +64,12 @@ bool Project::refresh_voice_params(audio::Voice* v, uint8_t instrument_id) {
     switch (inst.type) {
         case InstrumentType::Wavsynth:
             static_cast<synth::Wavsynth*>(v)->params = inst.wavsynth;    return true;
-        case InstrumentType::Sampler:
-            static_cast<synth::Sampler*>(v)->params = inst.sampler;      return true;
+        case InstrumentType::Sampler: {
+            auto* sv = static_cast<synth::Sampler*>(v);
+            sv->params = inst.sampler;
+            sv->params.bar_frames = synth::bar_frames_at_bpm(song.bpm);
+            return true;
+        }
         case InstrumentType::DrumKit:
             static_cast<synth::DrumKitVoice*>(v)->params = inst.drumkit; return true;
         case InstrumentType::FmSynth:

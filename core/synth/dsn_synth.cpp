@@ -25,6 +25,8 @@ static void build_dsn_sin_lut() {
     g_dsn_sin_built = true;
 }
 
+void warmup_dsn() { build_dsn_sin_lut(); }
+
 static inline fx::q15 dsn_sin(uint32_t phase16) {
     uint32_t idx_full = (phase16 & 0xFFFF) << 4;    // 16-bit → 20-bit
     int idx  = (idx_full >> 10) & 0x3FF;
@@ -106,10 +108,29 @@ static inline uint32_t pitch_to_inc(int32_t pitch_q16) {
 
 // === DsnEg ===
 void DsnEg::step(uint32_t a, uint32_t d, fx::q15 s, uint32_t r) {
+    auto refresh_rate = [&](Stage st, uint32_t duration) {
+        const int32_t sustain_key = (st == Stage::Release) ? (int32_t)(release_start >> 16) : (int32_t)s;
+        if (rate_stage == st && rate_duration == duration && rate_sustain == sustain_key) return;
+        rate_stage = st; rate_duration = duration; rate_sustain = sustain_key;
+        if (st == Stage::Attack) {
+            uint32_t aa = duration < 2 ? 2 : duration;
+            env_target = (fx::q31)((1LL << 31) - 1);
+            env_step = (fx::q31)((1LL << 31) / aa);
+        } else if (st == Stage::Decay) {
+            env_target = (fx::q31)s << 16;
+            uint32_t dd = duration ? duration : 1;
+            env_step = (fx::q31)(((1LL << 31) - env_target) / dd);
+        } else {
+            env_target = 0;
+            uint32_t rr = duration ? duration : 1;
+            env_step = release_start / (fx::q31)rr;
+            if (env_step < 1) env_step = 1;
+        }
+    };
     switch (stage) {
         case Stage::Attack: {
-            uint32_t aa = std::max<uint32_t>(a, 2);
-            env += (fx::q31)((1LL << 31) / aa);
+            refresh_rate(Stage::Attack, a);
+            env += env_step;
             if (env >= (fx::q31)((1LL << 31) - 1) || pos >= a) {
                 env = (fx::q31)((1LL << 31) - 1);
                 stage = Stage::Decay;
@@ -118,11 +139,10 @@ void DsnEg::step(uint32_t a, uint32_t d, fx::q15 s, uint32_t r) {
             break;
         }
         case Stage::Decay: {
-            fx::q31 target = (fx::q31)s << 16;
-            fx::q31 stp = (fx::q31)(((1LL << 31) - target) / std::max<uint32_t>(d, 1));
-            env -= stp;
-            if (env <= target || pos >= d) {
-                env = target;
+            refresh_rate(Stage::Decay, d);
+            env -= env_step;
+            if (env <= env_target || pos >= d) {
+                env = env_target;
                 stage = (s == 0) ? Stage::Idle : Stage::Sustain;
             }
             break;
@@ -131,10 +151,9 @@ void DsnEg::step(uint32_t a, uint32_t d, fx::q15 s, uint32_t r) {
             env = (fx::q31)s << 16;
             break;
         case Stage::Release: {
-            uint32_t rr = std::max<uint32_t>(r, 1);
-            fx::q31 stp = release_start / (fx::q31)rr;
-            if (stp < 1) stp = 1;
-            env -= stp;
+            refresh_rate(Stage::Release, r);
+            const uint32_t rr = r ? r : 1;
+            env -= env_step;
             if (env <= 0 || pos >= rr) {
                 env = 0;
                 stage = Stage::Idle;

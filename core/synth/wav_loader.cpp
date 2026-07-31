@@ -71,6 +71,7 @@ const char* wav_result_str(WavLoadResult r) {
         case WavLoadResult::UnsupportedFormat:   return "BAD FORMAT";
         case WavLoadResult::UnsupportedBits:     return "BAD BITS";
         case WavLoadResult::UnsupportedChannels: return "BAD CHANS";
+        case WavLoadResult::ReadError:           return "READ ERROR";
     }
     return "?";
 }
@@ -79,6 +80,11 @@ WavLoadResult load_wav_to_sample(const char* path, Sample& dst,
                                   int target_sr, int max_frames) {
     FILE* f = std::fopen(path, "rb");
     if (!f) return WavLoadResult::FileNotFound;
+    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return WavLoadResult::ReadError; }
+    long file_bytes = std::ftell(f);
+    if (file_bytes < 12 || std::fseek(f, 0, SEEK_SET) != 0) {
+        std::fclose(f); return WavLoadResult::NotRiff;
+    }
 
     // === RIFF header ===
     uint8_t hdr[12];
@@ -95,9 +101,16 @@ WavLoadResult load_wav_to_sample(const char* path, Sample& dst,
     char id[5];
     uint32_t csize;
     while (read_chunk_header(f, id, csize)) {
+        long payload_pos = std::ftell(f);
+        uint64_t padded = (uint64_t)csize + (uint64_t)(csize & 1u);
+        if (payload_pos < 0 || (uint64_t)payload_pos > (uint64_t)file_bytes ||
+            padded > (uint64_t)file_bytes - (uint64_t)payload_pos) {
+            std::fclose(f); return WavLoadResult::ReadError;
+        }
         if (std::memcmp(id, "fmt ", 4) == 0) {
             // fmt chunk: min. 16 bytes
-            uint8_t fmt_buf[40];
+            uint8_t fmt_buf[40] = {0};
+            if (csize < 16) { std::fclose(f); return WavLoadResult::NoFmtChunk; }
             uint32_t to_read = csize > 40 ? 40 : csize;
             if (std::fread(fmt_buf, 1, to_read, f) != to_read) break;
             format       = read_u16_le(fmt_buf + 0);
@@ -138,49 +151,61 @@ WavLoadResult load_wav_to_sample(const char* path, Sample& dst,
         return (format == 1) ? WavLoadResult::UnsupportedBits : WavLoadResult::UnsupportedFormat;
     }
 
-    // === read the data chunk ===
-    int bytes_per_sample = bits / 8;
-    int frame_bytes = bytes_per_sample * channels;
-    if (frame_bytes <= 0) { std::fclose(f); return WavLoadResult::UnsupportedFormat; }
-
-    uint32_t total_src_frames = data_size / frame_bytes;
+    // === bounded streaming decode + linear resample into q15 ===
+    const int bytes_per_sample = bits / 8;
+    const int frame_bytes = bytes_per_sample * channels;
+    if (frame_bytes <= 0 || target_sr <= 0 || max_frames <= 0 ||
+        sample_rate < 1000 || sample_rate > 384000) {
+        std::fclose(f); return WavLoadResult::UnsupportedFormat;
+    }
+    const uint32_t total_src_frames = data_size / (uint32_t)frame_bytes;
     if (total_src_frames == 0) { std::fclose(f); return WavLoadResult::NoDataChunk; }
 
-    // === resample ratio ===
-    // src_pos advances by ratio per output frame
-    // ratio = src_sr / target_sr (in floats, q24.8 for speed)
-    double ratio = (double)sample_rate / (double)target_sr;
-    // expected number of output frames
-    uint32_t out_frames_expected = (uint32_t)((double)total_src_frames / ratio);
-    bool truncated = false;
-    if ((int)out_frames_expected > max_frames) {
-        out_frames_expected = (uint32_t)max_frames;
-        truncated = true;
-    }
+    const double ratio = (double)sample_rate / (double)target_sr;
+    uint64_t expected64 = ((uint64_t)total_src_frames * (uint64_t)target_sr) / sample_rate;
+    bool truncated = expected64 > (uint64_t)max_frames;
+    uint32_t out_frames_expected = (uint32_t)(truncated ? max_frames : expected64);
+    if (out_frames_expected == 0) { std::fclose(f); return WavLoadResult::NoDataChunk; }
 
-    // === read everything into RAM at once (compact) ===
-    std::vector<uint8_t> raw(data_size);
-    std::fseek(f, data_offset, SEEK_SET);
-    if (std::fread(raw.data(), 1, data_size, f) != data_size) {
-        std::fclose(f);
-        return WavLoadResult::NoDataChunk;
-    }
-    std::fclose(f);
-
-    // === decode + resample into q15 ===
+    // Keep only a small source window in RAM. The output is hard-bounded by
+    // max_frames (15 sec in the UI), so malformed/huge source files cannot make
+    // us allocate their full data chunk as the old implementation did.
     dst.data.assign((std::size_t)out_frames_expected * channels, 0);
+
+    constexpr std::size_t BLOCK_FRAMES = 1024;
+    const std::size_t block_bytes = (BLOCK_FRAMES + 1) * (std::size_t)frame_bytes;
+    std::vector<uint8_t> raw(block_bytes);
+
+    if (std::fseek(f, data_offset, SEEK_SET) != 0) {
+        std::fclose(f); dst.data.clear(); return WavLoadResult::ReadError;
+    }
+    uint32_t block_start = 0;
+    uint32_t block_frames = 0;
+    auto load_block = [&](uint32_t src_frame) -> bool {
+        block_start = (src_frame / (uint32_t)BLOCK_FRAMES) * (uint32_t)BLOCK_FRAMES;
+        const uint32_t remain = total_src_frames - block_start;
+        block_frames = remain > BLOCK_FRAMES + 1 ? (uint32_t)BLOCK_FRAMES + 1 : remain;
+        const long off = data_offset + (long)((uint64_t)block_start * (uint64_t)frame_bytes);
+        if (std::fseek(f, off, SEEK_SET) != 0) return false;
+        const std::size_t want = (std::size_t)block_frames * (std::size_t)frame_bytes;
+        return std::fread(raw.data(), 1, want, f) == want;
+    };
 
     double src_pos = 0.0;
     for (uint32_t i = 0; i < out_frames_expected; ++i) {
         uint32_t src_idx = (uint32_t)src_pos;
         double frac = src_pos - (double)src_idx;
-        if (src_idx + 1 >= total_src_frames) {
-            // hit end of source - leave the rest as zeros
-            break;
+        if (src_idx >= total_src_frames) break;
+        if (block_frames == 0 || src_idx < block_start || src_idx + 1 >= block_start + block_frames) {
+            if (!load_block(src_idx)) {
+                std::fclose(f); dst.data.clear(); return WavLoadResult::ReadError;
+            }
         }
+        const uint32_t local_a = src_idx - block_start;
+        const uint32_t local_b = (src_idx + 1 < total_src_frames) ? local_a + 1 : local_a;
         for (int ch = 0; ch < channels; ++ch) {
-            std::size_t pos_a = (std::size_t)src_idx * channels + ch;
-            std::size_t pos_b = pos_a + channels;
+            std::size_t pos_a = (std::size_t)local_a * channels + ch;
+            std::size_t pos_b = (std::size_t)local_b * channels + ch;
             int16_t a = pcm_to_q15(raw.data(), pos_a, format, bits);
             int16_t b = pcm_to_q15(raw.data(), pos_b, format, bits);
             int32_t lerp = a + (int32_t)((b - a) * frac);
@@ -190,6 +215,7 @@ WavLoadResult load_wav_to_sample(const char* path, Sample& dst,
         }
         src_pos += ratio;
     }
+    std::fclose(f);
 
     // === fill in the Sample's metadata ===
     dst.channels   = (uint8_t)channels;

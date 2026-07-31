@@ -96,6 +96,8 @@ static void build_sin_lut() {
     }
     g_sin_lut_built = true;
 }
+void warmup_fm() { build_sin_lut(); }
+
 // fast_sin: phase in q16.16, take mod 1.0 -> 1024 lookup + 6-bit fractional lerp
 static inline fx::q15 fast_sin(uint32_t phase_q16) {
     // take the low 16 bits as the period phase, widen to 20 bits for indexing
@@ -169,12 +171,42 @@ void FmSynth::note_off() {
     }
 }
 
+// Refresh an operator envelope slope only when its stage or parameters change.
+static void refresh_env_rate(FmSynth::OpState& op, const FmOpParams& p) {
+    using Stage = FmSynth::OpState::Stage;
+    uint16_t duration = 0;
+    uint8_t sustain = p.sustain;
+    switch (op.stage) {
+        case Stage::Attack:  duration = p.attack; break;
+        case Stage::Decay:   duration = p.decay; break;
+        case Stage::Release: duration = p.release; sustain = (uint8_t)(op.release_start >> 23); break;
+        default: return;
+    }
+    if (op.rate_stage == op.stage && op.rate_duration == duration && op.rate_sustain == sustain) return;
+    op.rate_stage = op.stage;
+    op.rate_duration = duration;
+    op.rate_sustain = sustain;
+    if (op.stage == Stage::Attack) {
+        op.env_target = ENV_ONE;
+        op.env_step = duration ? ENV_ONE / (fx::q31)duration : ENV_ONE;
+    } else if (op.stage == Stage::Decay) {
+        op.env_target = (fx::q31)p.sustain << 23;
+        if (op.env_target > ENV_ONE) op.env_target = ENV_ONE;
+        op.env_step = duration ? (ENV_ONE - op.env_target) / (fx::q31)duration : ENV_ONE;
+    } else {
+        op.env_target = 0;
+        op.env_step = duration ? op.release_start / (fx::q31)duration : op.release_start;
+        if (op.env_step < 1) op.env_step = 1;
+    }
+}
+
 // advance one frame of the operator's ADSR, return env q30
 static fx::q31 advance_env(FmSynth::OpState& op, const FmOpParams& p) {
     using Stage = FmSynth::OpState::Stage;
     switch (op.stage) {
         case Stage::Attack: {
-            if (p.attack > 0) op.env += ENV_ONE / (fx::q31)p.attack;
+            refresh_env_rate(op, p);
+            if (p.attack > 0) op.env += op.env_step;
             if (op.env >= ENV_ONE || op.stage_pos >= p.attack) {
                 op.env = ENV_ONE;
                 op.stage = Stage::Decay;
@@ -187,12 +219,10 @@ static fx::q31 advance_env(FmSynth::OpState& op, const FmOpParams& p) {
                 op.stage = Stage::Sustain;
                 op.env = (fx::q31)p.sustain << 23;   // sustain 0-127 → q30 (127→~ENV_ONE)
             } else {
-                fx::q31 target = (fx::q31)p.sustain << 23;
-                if (target > ENV_ONE) target = ENV_ONE;
-                fx::q31 step = (ENV_ONE - target) / (fx::q31)p.decay;
-                op.env -= step;
-                if (op.env <= target || op.stage_pos >= p.decay) {
-                    op.env = target;
+                refresh_env_rate(op, p);
+                op.env -= op.env_step;
+                if (op.env <= op.env_target || op.stage_pos >= p.decay) {
+                    op.env = op.env_target;
                     op.stage = Stage::Sustain;
                 }
             }
@@ -218,8 +248,8 @@ static fx::q31 advance_env(FmSynth::OpState& op, const FmOpParams& p) {
                 op.env = 0;
                 op.stage = Stage::Idle;
             } else {
-                fx::q31 step = op.release_start / (fx::q31)p.release;
-                op.env -= step;
+                refresh_env_rate(op, p);
+                op.env -= op.env_step;
                 if (op.env <= 0 || op.stage_pos >= p.release) {
                     op.env = 0;
                     op.stage = Stage::Idle;
@@ -246,6 +276,16 @@ bool FmSynth::render(fx::q15* out, std::size_t frames) {
 
     // master volume q15
     fx::q15 mvol = (fx::q15)((params.master_volume * fx::Q15_ONE) / 127);
+
+    // Values that depend only on the current parameter block/topology are
+    // prepared once per render chunk, not for every operator of every frame.
+    fx::q15 op_level_q15[FM_NUM_OPS];
+    for (int i = 0; i < FM_NUM_OPS; ++i)
+        op_level_q15[i] = (fx::q15)(((int32_t)params.ops[i].level * fx::Q15_ONE) / 127);
+    int n_carriers = 0;
+    for (int i = 0; i < FM_NUM_OPS; ++i)
+        if (A.carrier_mask & (1 << i)) ++n_carriers;
+    if (n_carriers == 0) n_carriers = 1;
 
     bool any_alive = false;
 
@@ -294,7 +334,7 @@ bool FmSynth::render(fx::q15* out, std::size_t frames) {
             // amplitude = env * level (level 0-127 → q15 scale)
             fx::q31 env_q30 = op.env;                              // q30
             int32_t env_q15 = (int32_t)(env_q30 >> 15);            // q15
-            int32_t lvl = ((int32_t)p.level * fx::Q15_ONE) / 127;  // q15
+            int32_t lvl = op_level_q15[i];                          // q15, cached per chunk
             int32_t amp = (env_q15 * lvl) >> 15;                   // q15
 
             int32_t out_v = ((int32_t)raw * amp) >> 15;            // q15
@@ -308,15 +348,17 @@ bool FmSynth::render(fx::q15* out, std::size_t frames) {
 
         // sum the carriers
         int32_t mix = 0;
-        int n_carriers = 0;
         for (int i = 0; i < FM_NUM_OPS; ++i) {
-            if (A.carrier_mask & (1 << i)) {
-                mix += op_out[i];
-                ++n_carriers;
-            }
+            if (A.carrier_mask & (1 << i)) mix += op_out[i];
         }
-        if (n_carriers == 0) n_carriers = 1;
-        mix /= n_carriers;     // headroom - divide by the number of carriers
+        // Constant divisors compile to shifts/magic multiplies on ARM; the old
+        // dynamic divide emitted a software division call for every sample.
+        switch (n_carriers) {
+            case 2: mix /= 2; break;
+            case 3: mix /= 3; break;
+            case 4: mix /= 4; break;
+            default: break;
+        }
 
         // master + velocity
         int32_t v = mix;

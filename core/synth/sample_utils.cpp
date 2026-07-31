@@ -4,6 +4,15 @@
 
 namespace trackr::synth {
 
+// helper: extract the q15 value of the left channel for frame i
+// for mono = data[i], for stereo = data[i*2]
+static inline int16_t left_at(const Sample& s, uint32_t frame) {
+    if (s.channels == 2) {
+        return s.data[frame * 2];
+    }
+    return s.data[frame];
+}
+
 // === destructive edit ops (moved out of ui/sample_editor.cpp so the
 // instrument editor's WAVE panel shares one implementation) ===
 
@@ -99,13 +108,96 @@ int sample_chop_count(const Sample& s) {
     return n;
 }
 
-// helper: extract the q15 value of the left channel for frame i
-// for mono = data[i], for stereo = data[i*2]
-static inline int16_t left_at(const Sample& s, uint32_t frame) {
-    if (s.channels == 2) {
-        return s.data[frame * 2];
+int sample_chops_sorted(const Sample& s, uint32_t* out) {
+    int n = 0;
+    for (int i = 0; i < Sample::MAX_CHOPS; ++i)
+        if (s.chops[i] != 0xFFFFFFFFu) out[n++] = s.chops[i];
+    // insertion sort (n <= 32)
+    for (int i = 1; i < n; ++i) {
+        uint32_t v = out[i];
+        int j = i - 1;
+        while (j >= 0 && out[j] > v) { out[j + 1] = out[j]; --j; }
+        out[j + 1] = v;
     }
-    return s.data[frame];
+    return n;
+}
+
+// === transient auto-slice ===
+// classic energy-onset detector, integer only (no float on the ARM11 path):
+//   1. mean |x| per 4ms window (128 frames @32k) -> envelope
+//   2. onset when env rises above trailing average by a sensitivity-scaled
+//      ratio AND clears a small absolute floor (kills hiss-triggering)
+//   3. refractory ~40ms so one snare doesn't fire 3 markers
+//   4. marker backtracked to the local minimum before the rise (hit START,
+//      not its peak), then snapped to a zero crossing
+// sensitivity 0..255 maps to onset ratio ~4.0 (low) .. ~1.15 (high).
+int sample_auto_slice_transients(Sample& s, int sensitivity) {
+    const uint32_t total = s.num_frames();
+    if (total < 256) return 0;
+
+    constexpr uint32_t WIN = 128;            // 4ms @ 32k
+    constexpr uint32_t REFRACT_WIN = 10;     // 10 windows = 40ms refractory
+    const uint32_t n_win = total / WIN;
+    if (n_win < 4) return 0;
+
+    if (sensitivity < 0) sensitivity = 0;
+    if (sensitivity > 255) sensitivity = 255;
+    // ratio in q8: 255->294 (x1.15), 0->1024 (x4.0). linear in between.
+    const int32_t ratio_q8 = 1024 - ((1024 - 294) * sensitivity) / 255;
+
+    // envelope: mean |left| per window. heap vector - ~n_win*4 bytes, fine.
+    std::vector<int32_t> env(n_win);
+    int32_t peak = 1;
+    for (uint32_t w = 0; w < n_win; ++w) {
+        int64_t acc = 0;
+        const uint32_t base = w * WIN;
+        for (uint32_t i = 0; i < WIN; ++i) {
+            int32_t v = left_at(s, base + i);
+            acc += v < 0 ? -v : v;
+        }
+        env[w] = (int32_t)(acc / WIN);
+        if (env[w] > peak) peak = env[w];
+    }
+    // absolute floor: 2% of peak envelope - below that it's noise/tail
+    const int32_t floor_abs = peak / 50;
+
+    // wipe old chops, place new ones. chop[0] is always frame 0: a trimmed
+    // break starts ON a hit, but an onset at frame 0 has no rising edge to
+    // detect (no trailing context). matches equal-slice behaviour too.
+    for (auto& c : s.chops) c = 0xFFFFFFFFu;
+    s.chops[0] = 0;
+    int placed = 1;
+
+    // trailing average over the previous 8 windows (32ms context)
+    constexpr uint32_t CTX = 8;
+    uint32_t last_onset_w = 0; bool have_onset = false;
+
+    for (uint32_t w = 1; w < n_win && placed < Sample::MAX_CHOPS; ++w) {
+        int64_t trail = 0; uint32_t cnt = 0;
+        for (uint32_t k = (w > CTX ? w - CTX : 0); k < w; ++k) { trail += env[k]; ++cnt; }
+        int32_t avg = cnt ? (int32_t)(trail / cnt) : 0;
+        if (avg < 1) avg = 1;
+
+        const bool rising = env[w] > ((int64_t)avg * ratio_q8 >> 8) && env[w] > floor_abs;
+        const bool free_of_refract = !have_onset || (w - last_onset_w) >= REFRACT_WIN;
+        if (!rising || !free_of_refract) continue;
+
+        // backtrack to the local envelope minimum (start of the hit)
+        uint32_t wm = w;
+        while (wm > 0 && env[wm - 1] < env[wm]) --wm;
+        uint32_t frame = wm * WIN;
+        frame = find_zero_crossing_near(s, frame, WIN);
+        // dedupe: skip if a chop is already within half a window
+        bool dup = false;
+        for (int i = 0; i < placed; ++i) {
+            uint32_t c = s.chops[i];
+            uint32_t d = c > frame ? c - frame : frame - c;
+            if (d < WIN / 2) { dup = true; break; }
+        }
+        if (!dup) s.chops[placed++] = frame;
+        last_onset_w = w; have_onset = true;
+    }
+    return placed;
 }
 
 uint32_t find_zero_crossing_near(const Sample& s,

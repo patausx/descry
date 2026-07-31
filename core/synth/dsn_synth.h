@@ -26,6 +26,9 @@ namespace trackr::synth {
 
 enum class DsnWave : uint8_t { Tri = 0, Saw, Pulse, Sine, Noise };
 
+// Build analog oscillator lookup tables outside the first-note realtime path.
+void warmup_dsn();
+
 inline const char* dsn_wave_name(DsnWave w) {
     switch (w) {
         case DsnWave::Tri:   return "TRI";
@@ -103,6 +106,11 @@ struct DsnEg {
     fx::q31  env   = 0;
     fx::q31  release_start = 0;
     uint32_t pos   = 0;
+    Stage    rate_stage = Stage::Idle;
+    uint32_t rate_duration = 0xFFFFFFFFu;
+    int32_t  rate_sustain = -1;
+    fx::q31  env_step = 1;
+    fx::q31  env_target = 0;
 
     inline void gate_on() { stage = Stage::Attack; pos = 0; }   // retrigs from current env (no click)
     inline void gate_off() {

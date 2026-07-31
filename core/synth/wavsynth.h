@@ -27,6 +27,9 @@ struct WavsynthParams {
 
 constexpr int WAVSYNTH_MAX_OSC = 3;
 
+// Build oscillator lookup tables outside the first-note realtime path.
+void warmup_wavsynth();
+
 class Wavsynth : public audio::Voice {
 public:
     void note_on(int note, int velocity) override;
@@ -54,6 +57,14 @@ private:
 
     enum class Stage { Idle, Attack, Decay, Sustain, Release };
     Stage   stage_ = Stage::Idle;
+    // Cached envelope slope: divisions happen only on stage/parameter changes,
+    // never for every rendered sample.
+    Stage   rate_stage_ = Stage::Idle;
+    uint32_t rate_duration_ = 0xFFFFFFFFu;
+    int32_t rate_sustain_ = -1;
+    fx::q31 env_step_ = 1;
+    fx::q31 env_target_ = 0;
+    void refresh_env_rate();
     fx::q31 env_   = 0;     // q31 for envelope smoothness
     fx::q31 release_start_ = 0;  // env_ level at note_off - for LINEAR release to zero
     uint32_t stage_pos_ = 0;

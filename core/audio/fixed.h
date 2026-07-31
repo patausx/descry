@@ -36,6 +36,9 @@ inline q15 lerp_q15(q15 a, q15 b, uq16 frac) {
     return static_cast<q15>(a + (int32_t)(((int64_t)diff * (int64_t)frac) >> 16));
 }
 
+// Eagerly build the pitch table before the realtime worker starts.
+void warmup_pitch_table(int sample_rate);
+
 // midi note -> phase increment in q16 for 32000 hz sample rate
 // phase_inc = freq * (2^16) / sample_rate
 // freq = 440 * 2^((note-69)/12)

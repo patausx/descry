@@ -56,6 +56,7 @@ class App {
 public:
     App(seq::Project& p, seq::Player& pl, audio::Mixer& m)
         : project_(p), player_(pl), mixer_(m) {}
+    ~App() { mixer_.cut_preview_voices(); }
 
     void update(const InputState& in);
 
@@ -127,6 +128,8 @@ private:
     // draws the waveform + chop markers; touch handled via slice_panel_touch.
     void draw_slice_panel(Draw& d, int slot);
     void slice_panel_touch(int x, int y, int slot, bool is_move);
+    // audition one slice on track 0 (0 = whole sample, 1..MAX = chop idx+1)
+    void preview_slice(int slice_1based);
     // WAVE panel: waveform + start/length drag + destructive op buttons
     // (NORM/REV/FADI/FADO/G+/G-/CROP). replaces the old Sample-screen Trim/Fx modes.
     void draw_wave_panel(Draw& d, int slot);
@@ -208,6 +211,17 @@ private:
     // returns the inst id of the created kit, or -1 on error.
     // updates smp_status_ with the result.
     int make_kit_from_sample(int sample_slot);
+
+    // spread the sample's slices across the current phrase: instrument goes
+    // chromatic-slices, step k gets note root+k (k-th slice in sorted order),
+    // phrase length = slice count. instant playable break re-sequence.
+    int spread_slices_to_phrase(int sample_slot);
+
+    // SHUF: shuffle the current phrase's steps in place (fisher-yates over the
+    // playable length). notes/instruments/fx move together; empty steps take
+    // part, so gaps get redistributed too. every step is recorded into the undo
+    // stack, so a bad roll is one UNDO away.
+    void shuffle_phrase_steps();
 
     // create a Sampler instrument from the sample. returns inst id or -1.
     int make_sampler_inst_from_sample(int sample_slot);
@@ -333,14 +347,23 @@ private:
     uint8_t cur_table_  = 0;     // selected table for the editor
 
     // === sample panel state (WAVE/SLICE/LOAD/REC bottom panels of Instrument) ===
-    int        smp_chop_sel_   = 0;        // selected chop 0..15 (SLICE panel)
+    int        smp_chop_sel_   = 0;        // selected chop 0..31 (SLICE panel)
+    int        smp_auto_sens_  = 1;        // transient slice sensitivity idx 0=LO 1=MID 2=HI
+    int        smp_eq_idx_     = 2;        // equal slice count idx into {4,8,16,32}
+    // LOAD panel: X auditions the highlighted WAV into this transient sample;
+    // A still imports into the selected bank slot. The preview sample never
+    // touches persistence and its voice is cut before the buffer is replaced.
+    synth::Sample wav_preview_sample_;
+    bool       wav_preview_active_ = false;
+    char       wav_preview_name_[40] = {0};
     int        wav_sel_        = 0;        // selected WAV file in LOAD panel
     int        wav_count_      = 0;        // number of scanned WAVs
     bool       wav_scanned_    = false;    // flag: the list has already been scanned
     static constexpr int MAX_WAV_FILES = 64;
-    char       wav_files_[MAX_WAV_FILES][40] = {{0}};
+    static constexpr int MAX_WAV_NAME = 128;
+    char       wav_files_[MAX_WAV_FILES][MAX_WAV_NAME] = {{0}};
     bool       wav_is_dir_[MAX_WAV_FILES] = {false};   // true = this is a subfolder (enter with A)
-    char       wav_subpath_[80] = {0};                 // current subfolder relative to wav/ ("" = root)
+    char       wav_subpath_[160] = {0};                // current subfolder relative to wav/ ("" = root)
     int        smp_drag_kind_  = 0;        // 0=none,1=start,2=end,3=loop_s,4=loop_e,5=chop
     bool       smp_touch_active_ = false;
     char       smp_status_[40] = {0};      // last action (for UI)
@@ -452,6 +475,8 @@ public:
     // audio underrun counter (worker starved - written by platform each frame,
     // shown in the fullscreen scope footer for on-device diagnosis)
     uint32_t debug_xruns = 0;
+    uint32_t debug_render_us = 0;
+    uint32_t debug_render_max_us = 0;
 private:
 
     // bottom-screen panel selector for the Instrument view (Sampler type).

@@ -9,7 +9,10 @@
 #include <malloc.h>
 
 #include "../../core/audio/mixer.h"
+#include "../../core/audio/fixed.h"
 #include "../../core/synth/wavsynth.h"
+#include "../../core/synth/fm.h"
+#include "../../core/synth/dsn_synth.h"
 #include "../../core/synth/wavetable.h"
 #include "../../core/synth/sampler.h"
 #include "../../core/synth/mic_recorder.h"
@@ -165,19 +168,13 @@ static bool render_song_to_wav() {
 // (moved up)
 
 // === sample file format .s16 ===
-// header 64 byte:
-//   magic 4   = 'TR3S'
-//   version 1 = 1
-//   channels 1 = 1 or 2
-//   root_note 1
-//   reserved 1
-//   loop_start 4
-//   loop_end   4
-//   chops 16*4 = 64 byte... doesn't fit. shift the header.
-// make magic+meta = 16 byte, then chops 64 byte = 80 byte total
+// header 16 byte (magic+meta), then chops MAX_CHOPS*4, then q15 PCM.
+// version 1: 16 chops (64 byte). version 2: 32 chops (128 byte).
+// version 3: v2 + slice_rev_mask (4 byte) after the chops.
+// older files load fine - missing chops become empty, missing mask = 0.
 struct SampleFileHeader {
     uint32_t magic;       // 'TR3S' = 0x53335254
-    uint8_t  version;     // 1
+    uint8_t  version;     // 3 (v1 = 16-chop, v2 = 32-chop, no mask)
     uint8_t  channels;    // 1 or 2
     uint8_t  root_note;
     uint8_t  flags;       // bit0 = reversed (legacy)
@@ -186,6 +183,9 @@ struct SampleFileHeader {
 };
 static_assert(sizeof(SampleFileHeader) == 16, "sample header layout");
 constexpr uint32_t SAMPLE_FILE_MAGIC = 0x53335254;  // 'TR3S' little-endian
+constexpr uint8_t  SAMPLE_FILE_VERSION = 3;
+constexpr int      SAMPLE_V1_CHOPS = 16;
+static_assert(synth::Sample::MAX_CHOPS >= SAMPLE_V1_CHOPS, "chop array shrank");
 
 // === sample dirty tracking ===
 // exit autosave used to rewrite EVERY non-empty sample to SD - multi-MB of
@@ -201,11 +201,13 @@ static uint32_t sample_fingerprint(const synth::Sample& s) {
         for (std::size_t i = 0; i < n; ++i) { h ^= b[i]; h *= 16777619u; }
     };
     mix(&s.channels,   sizeof(s.channels));
+    mix(s.name,        sizeof(s.name));
     mix(&s.root_note,  sizeof(s.root_note));
     mix(&s.reversed,   sizeof(s.reversed));
     mix(&s.loop_start, sizeof(s.loop_start));
     mix(&s.loop_end,   sizeof(s.loop_end));
     mix(s.chops, sizeof(s.chops));
+    mix(&s.slice_rev_mask, sizeof(s.slice_rev_mask));
     mix(s.data.data(), s.data.size() * sizeof(int16_t));
     uint32_t r = h ^ (uint32_t)s.data.size();
     return r ? r : 1;   // reserve 0 for "no fingerprint"
@@ -216,22 +218,47 @@ static void save_sample_to_sd(int slot) {
     if (s.data.empty()) return;
     mkdir("sdmc:/3ds", 0777);
     mkdir(SAMPLE_DIR, 0777);
-    char path[64];
+    char path[64], tmp_path[72];
     std::snprintf(path, sizeof(path), "%s/sample_%02d.s16", SAMPLE_DIR, slot);
-    FILE* f = std::fopen(path, "wb");
+    std::snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    FILE* f = std::fopen(tmp_path, "wb");
     if (!f) return;
     SampleFileHeader h{};
     h.magic       = SAMPLE_FILE_MAGIC;
-    h.version     = 1;
+    h.version     = SAMPLE_FILE_VERSION;
     h.channels    = s.channels ? s.channels : 1;
     h.root_note   = (uint8_t)s.root_note;
     h.flags       = s.reversed ? 1 : 0;
     h.loop_start  = s.loop_start;
     h.loop_end    = s.loop_end;
-    std::fwrite(&h, sizeof(h), 1, f);
-    std::fwrite(s.chops, sizeof(s.chops), 1, f);
-    std::fwrite(s.data.data(), sizeof(int16_t), s.data.size(), f);
-    std::fclose(f);
+    bool ok = std::fwrite(&h, sizeof(h), 1, f) == 1
+           && std::fwrite(s.chops, sizeof(s.chops), 1, f) == 1
+           && std::fwrite(&s.slice_rev_mask, sizeof(s.slice_rev_mask), 1, f) == 1
+           && std::fwrite(s.data.data(), sizeof(int16_t), s.data.size(), f) == s.data.size();
+    ok = (std::fclose(f) == 0) && ok;
+    if (!ok) { std::remove(tmp_path); return; }
+    std::remove(path);
+    if (std::rename(tmp_path, path) != 0) { std::remove(tmp_path); return; }
+
+    // sample name persistence sidecar. PCM stays in backward-compatible .s16;
+    // names are tiny and should also be written atomically.
+    char name_path[72], name_tmp[76];
+    std::snprintf(name_path, sizeof(name_path), "%s/sample_%02d.name", SAMPLE_DIR, slot);
+    std::snprintf(name_tmp, sizeof(name_tmp), "%s.tmp", name_path);
+    if (s.name[0]) {
+        FILE* nf = std::fopen(name_tmp, "wb");
+        bool nok = nf && std::fwrite(s.name, 1, ::strnlen(s.name, sizeof(s.name)), nf) == ::strnlen(s.name, sizeof(s.name));
+        if (nf) nok = (std::fclose(nf) == 0) && nok;
+        if (nok) {
+            std::remove(name_path);
+            if (std::rename(name_tmp, name_path) != 0) std::remove(name_tmp);
+        } else {
+            std::remove(name_tmp);
+        }
+    } else {
+        std::remove(name_path);
+        std::remove(name_tmp);
+    }
     g_sample_hash[slot] = sample_fingerprint(s);   // written = clean
 }
 
@@ -251,22 +278,43 @@ static void load_sample_from_sd(int slot) {
 
     // peek magic
     SampleFileHeader h{};
-    std::fread(&h, sizeof(h), 1, f);
-    if (h.magic == SAMPLE_FILE_MAGIC && h.version == 1) {
-        // new format with a header
-        std::fread(tmp.chops, sizeof(tmp.chops), 1, f);
-        long header_bytes = (long)sizeof(h) + (long)sizeof(tmp.chops);
+    if (std::fread(&h, sizeof(h), 1, f) != 1) { std::fclose(f); return; }
+    if (h.magic == SAMPLE_FILE_MAGIC && h.version >= 1 && h.version <= 3) {
+        if (h.channels < 1 || h.channels > 2 || h.root_note > 127) { std::fclose(f); return; }
+        // header format. v1 stored 16 chops, v2+ store MAX_CHOPS (32).
+        const int n_chops = (h.version == 1) ? SAMPLE_V1_CHOPS : synth::Sample::MAX_CHOPS;
+        if (std::fread(tmp.chops, sizeof(uint32_t), n_chops, f) != (std::size_t)n_chops) {
+            std::fclose(f); return;
+        }
+        // Sample() ctor already filled all chops with 0xFFFFFFFF - the tail
+        // beyond n_chops stays empty for v1 files.
+        long header_bytes = (long)sizeof(h) + (long)(n_chops * sizeof(uint32_t));
+        if (h.version >= 3) {
+            if (std::fread(&tmp.slice_rev_mask, sizeof(tmp.slice_rev_mask), 1, f) != 1) {
+                std::fclose(f); return;
+            }
+            header_bytes += (long)sizeof(tmp.slice_rev_mask);
+        }
         long audio_bytes = bytes - header_bytes;
-        if (audio_bytes <= 0) { std::fclose(f); return; }
+        if (audio_bytes <= 0 || (audio_bytes & 1) ||
+            !synth::SampleBank::instance().can_replace_bytes(slot, (std::size_t)audio_bytes)) {
+            std::fclose(f); return;
+        }
         tmp.channels   = h.channels ? h.channels : 1;
         tmp.root_note  = h.root_note;
         tmp.reversed   = (h.flags & 1) != 0;
         tmp.loop_start = h.loop_start;
         tmp.loop_end   = h.loop_end;
         tmp.data.resize(audio_bytes / 2);
-        std::fread(tmp.data.data(), 2, tmp.data.size(), f);
+        if (std::fread(tmp.data.data(), 2, tmp.data.size(), f) != tmp.data.size()) {
+            std::fclose(f); return;
+        }
     } else {
         // legacy: raw mono int16, without metadata
+        if ((bytes & 1) ||
+            !synth::SampleBank::instance().can_replace_bytes(slot, (std::size_t)bytes)) {
+            std::fclose(f); return;
+        }
         std::fseek(f, 0, SEEK_SET);
         tmp.channels   = 1;
         tmp.root_note  = 60;
@@ -275,9 +323,33 @@ static void load_sample_from_sd(int slot) {
         tmp.reversed   = false;
         for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) tmp.chops[i] = 0xFFFFFFFFu;
         tmp.data.resize(bytes / 2);
-        std::fread(tmp.data.data(), 2, tmp.data.size(), f);
+        if (std::fread(tmp.data.data(), 2, tmp.data.size(), f) != tmp.data.size()) {
+            std::fclose(f); return;
+        }
     }
     std::fclose(f);
+
+    char name_path[72];
+    std::snprintf(name_path, sizeof(name_path), "%s/sample_%02d.name", SAMPLE_DIR, slot);
+    FILE* nf = std::fopen(name_path, "rb");
+    if (nf) {
+        std::size_t got = std::fread(tmp.name, 1, sizeof(tmp.name) - 1, nf);
+        tmp.name[got] = 0;
+        std::fclose(nf);
+    } else {
+        std::snprintf(tmp.name, sizeof(tmp.name), "sample %02d", slot);
+    }
+    if (tmp.channels < 1 || tmp.channels > 2 ||
+        tmp.data.size() % tmp.channels != 0 ||
+        tmp.loop_start > tmp.num_frames() || tmp.loop_end > tmp.num_frames()) {
+        return;
+    }
+    for (auto& c : tmp.chops)
+        if (c != 0xFFFFFFFFu && c >= tmp.num_frames()) c = 0xFFFFFFFFu;
+
+    if (!synth::SampleBank::instance().can_replace(slot, tmp)) {
+        return; // aggregate 32MB PCM budget: keep the existing slot intact
+    }
 
     // publish: cut any voice reading this slot, then swap under the lock
     auto& s = synth::SampleBank::instance().slot(slot);
@@ -638,6 +710,15 @@ int main() {
 
     setup_demo();
 
+    // All lazy DSP tables used to be built by the first sounding note while the
+    // audio worker held its realtime lock. Warm them before starting NDSP so the
+    // first note cannot pay thousands of sin/pow calls.
+    fx::warmup_pitch_table(32000);
+    synth::warmup_sampler();
+    synth::warmup_wavsynth();
+    synth::warmup_fm();
+    synth::warmup_dsn();
+
     seq::Player player(g_project, g_mixer);
     ui::App app(g_project, player, g_mixer);
 
@@ -807,6 +888,26 @@ int main() {
     bool prev_touch = false;
     int  rec_target = -1;       // keep the slot between begin/stop
 
+    // Publish a completed mic take with a pointer-safe, constant-time swap.
+    // Capture + 32728->32000 rate conversion happen in SampleRecorder's private
+    // staging buffer without the audio lock; only voice cut + vector move are locked.
+    auto publish_mic_take = [&]() {
+        synth::Sample completed;
+        int slot = -1;
+        if (!rec.take_completed(completed, slot)) return;
+        if (slot >= 0 && slot < synth::SAMPLE_BANK_SIZE) {
+            if (!synth::SampleBank::instance().can_replace(slot, completed)) {
+                rec_target = -1;
+                return;
+            }
+            audio::Mixer::LockGuard _g(g_mixer);
+            g_mixer.cut_slot_voices(slot);
+            synth::SampleBank::instance().slot(slot) = std::move(completed);
+        }
+        if (slot >= 0) app.on_rec_done(slot);
+        rec_target = -1;
+    };
+
     // smart L/R: track whether a dpad press happened during the hold (then it's a modifier, not a tap)
     bool prev_l_held = false;
     bool prev_r_held = false;
@@ -839,35 +940,19 @@ int main() {
             r_used_modifier = true;          // this R hold was a combo, not a screen-switch tap
         }
 
-        // mic recording: ZR - record into the slot the app specifies
+        // mic recording: ZR - record into a private staging sample, then publish
+        // with a short swap. No allocation/resampling runs under the audio lock.
         bool y_now = (held & KEY_ZR) != 0;
         if (mic_ok) {
             if (y_now && !prev_y) {
                 rec_target = app.rec_target_slot();
-                // begin_recording clears + re-reserves the slot's data vector -
-                // any sampler voice still reading it would be use-after-free.
-                // hold the lock across cut+begin so the player can't fire a new
-                // note on this slot in between. (tick() then only appends within
-                // the reservation - the data pointer stays stable - safe.)
-                audio::Mixer::LockGuard _g(g_mixer);
-                g_mixer.cut_slot_voices(rec_target);
-                rec.begin_recording(rec_target);
+                if (!rec.begin_recording(rec_target)) rec_target = -1;
             } else if (!y_now && prev_y) {
-                // stop_recording rate-corrects (32728->32000) by SWAPPING the
-                // slot's data vector - same UAF class as destructive edits.
-                // cut readers + hold the lock for the swap. tick() can also
-                // hit the auto-stop path internally, so it sits under the same
-                // guard (its normal appends are within reserve - cheap).
-                audio::Mixer::LockGuard _g(g_mixer);
-                g_mixer.cut_slot_voices(rec_target);
                 rec.stop_recording();
-                if (rec_target >= 0) app.on_rec_done(rec_target);
-                rec_target = -1;
+                publish_mic_take();
             }
-            {
-                audio::Mixer::LockGuard _g(g_mixer);
-                rec.tick();
-            }
+            rec.tick();
+            publish_mic_take();       // handles max-length auto-stop too
         }
         prev_y = y_now;
 
@@ -1054,8 +1139,10 @@ int main() {
 
         audio.tick();
 
-        // mirror the audio underrun counter for the scope debug footer
+        // mirror realtime audio diagnostics for the fullscreen scope footer
         app.debug_xruns = audio.underruns();
+        app.debug_render_us = audio.render_last_us();
+        app.debug_render_max_us = audio.render_max_us();
 
         // settings changed (theme / octave / kb mode / kaoss assigns)? persist.
         // a few bytes memcmp per frame, a tiny file write only on change.
@@ -1094,7 +1181,7 @@ int main() {
         // === big waveform overlay during recording (over the top screen) ===
         if (rec.is_recording() && rec_target >= 0 &&
             rec_target < (int)synth::SAMPLE_BANK_SIZE) {
-            auto& s = synth::SampleBank::instance().slot(rec_target);
+            const auto& s = rec.preview_sample();
             // background panel covering the whole screen
             draw.rect(0, 50, 400, 130, 0xFF200810);
             // frame
@@ -1170,6 +1257,7 @@ int main() {
 
     if (player.playing()) player.stop();
     rec.stop_recording();
+    publish_mic_take();
     if (mic_ok) mic.platform_shutdown();
     audio.shutdown();
     // autosave to session.tr3d - ONLY if the user changed something

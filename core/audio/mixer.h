@@ -6,6 +6,7 @@
 #include "../dsp/filter.h"
 #include "../dsp/lfo.h"
 #include <array>
+#include <atomic>
 #include <vector>
 
 namespace trackr::audio {
@@ -144,10 +145,24 @@ public:
     // performance path.
     void cut_slot_voices(int sample_slot);
 
-    // reset master DSP state (DC blocker, per-track filter state, reverb tail counter)
+    // Dedicated file-browser audition lane. It bypasses track mute/faders/FX and
+    // cannot steal sequencer voices, so X-preview is audible regardless of the
+    // state of track 0. Mixer takes ownership of the already allocated voice.
+    Voice* start_preview_voice(Voice* v, int note, int velocity);
+    void stop_preview_voice();
+
+    // hard-delete transient legacy preview voices plus the dedicated lane.
+    void cut_preview_voices();
+
+    // reset master DSP state (DC blocker, delay/reverb tails, per-track filter state)
     void reset_master_state() {
         dc_x_l_ = dc_y_l_ = 0;
         dc_x_r_ = dc_y_r_ = 0;
+        for (auto& v : delay_l) v = 0;
+        for (auto& v : delay_r) v = 0;
+        delay_pos = 0;
+        delay_nonzero_ = 0;
+        reverb.reset();
         reverb_tail_frames_ = 0;
         for (auto& t : tracks_) {
             t.filter_l.reset();
@@ -180,6 +195,7 @@ public:
     fx::q15 delay_l[DELAY_BUF] = {0};
     fx::q15 delay_r[DELAY_BUF] = {0};
     std::size_t delay_pos = 0;
+    std::size_t delay_nonzero_ = 0;      // exact occupied-cell count for zero-cost empty bypass
     std::size_t delay_time = 6400;       // ~200ms (8th note @ 120bpm)
     fx::q15 delay_feedback = fx::Q15_ONE * 50 / 100;
     fx::q15 delay_wet      = fx::Q15_ONE * 70 / 100;
@@ -211,12 +227,14 @@ public:
     // === resample/bounce capture (recording master output into an internal buffer) ===
     void start_resample(std::size_t max_frames);
     void stop_resample();
-    bool is_resampling() const { return resample_active_; }
-    std::size_t resample_frames() const { return resample_pos_; }
-    const fx::q15* resample_data() const { return resample_buf_.data(); }
+    bool is_resampling() const { return resample_active_.load(std::memory_order_relaxed); }
+    std::size_t resample_frames();
+    // Move a stopped capture out under the audio lock. No multi-megabyte copy.
+    bool take_resample(std::vector<fx::q15>& out, std::size_t& frames);
 
 private:
     std::array<TrackState, NUM_TRACKS> tracks_;
+    Voice* preview_voice_ = nullptr; // dedicated dry audition lane, owned by Mixer
     uint32_t age_counter_ = 0;
     void* audio_lock_ = nullptr;  // opaque RecursiveLock* (set by platform)
     // temporary buffer for a single voice (stereo interleaved)
@@ -236,7 +254,7 @@ private:
     std::vector<fx::q15> resample_buf_;
     std::size_t resample_pos_ = 0;
     std::size_t resample_max_ = 0;
-    bool        resample_active_ = false;
+    std::atomic<bool> resample_active_{false};
     // master DC blocker state - used to be statics in render(), now members so reset clears them
     int32_t     dc_x_l_ = 0, dc_y_l_ = 0;
     int32_t     dc_x_r_ = 0, dc_y_r_ = 0;

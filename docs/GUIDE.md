@@ -246,14 +246,23 @@ ops 2-4 silent.
 
 ### sampler
 
-two-column param list: `TYPE / SAMPLE / PLAY / SLICE / START / LENGTH` and
+two-column param list: `TYPE / SAMPLE / PLAY / SLICE / SYNC / START / LENGTH` and
 `LOOP-S / LOOP-E / DETUNE / ATK / REL / TABLE`.
 
-- `PLAY` modes: `FWD · REV · FWDLOOP · REVLOOP · REPITCH`. loop modes use the
-  `LOOP-S`/`LOOP-E` markers when set; with no markers they loop the whole
-  play window (`START`..`LEN`).
+- `PLAY` modes: `FWD · REV · FWDLOOP · REVLOOP · REPITCH · THRU`. loop modes
+  use the `LOOP-S`/`LOOP-E` markers when set; with no markers they loop the
+  whole play window (`START`..`LEN`). `THRU` is the break-chopper mode: a
+  slice starts at its marker but plays through to the end of the sample
+  instead of cutting at the next marker (let a crash ring out).
 - `SLICE`: 0 = whole sample (scroll below 0 to toggle chromatic-slice mode),
-  1..16 = play a fixed chop.
+  1..32 = play a fixed chop. slices are numbered left-to-right (sorted by
+  position, not by creation order).
+- `SYNC`: beat sync, akai/amiga style **repitch** (not time-stretch). `OFF` =
+  play at root pitch. `1..8` = "this sample is N bars long" — the playback
+  rate is scaled so it lasts exactly N bars at the project tempo, and the row
+  shows the resulting shift (`2BAR -3.1st`). drop a 174bpm break into a 140bpm
+  project, set `SYNC 1`, done — it fits, pitched down like real hardware.
+  changing the song tempo re-fits automatically on the next note.
 - `DETUNE` = fine tune ±50 cents.
 
 the bottom screen has five tabs: **KB / WAVE / SLICE / LOAD / REC**.
@@ -261,9 +270,31 @@ the bottom screen has five tabs: **KB / WAVE / SLICE / LOAD / REC**.
 - **WAVE** — sample editor. op buttons: `NORM · REV · FAD< · FAD> · G+3 ·
   G-3 · CROP · COPY`, drag the start/end markers on the waveform, A/B set the
   root note.
-- **SLICE** — chop editor. tap/drag chop markers on the waveform; A =
-  auto-slice ×16, B = clear all chops, X = spread the chops onto a new
-  drumkit (chop → kit).
+- **SLICE** — the break chopper. up to 32 markers per sample.
+  - buttons: `TRNS` = transient auto-chop (press again to cycle LO/MID/HI
+    sensitivity), `EQ n` = equal slice (press again to cycle 4/8/16/32),
+    `REV` = reverse just the selected slice (the button lights up; reversed
+    regions get tick marks along the bottom of the waveform), `DEL` = delete
+    selected marker, `CLR` = wipe all, `>KIT` = spread chops onto a drumkit,
+    `>PHR` = spread slices across the current phrase, `SHUF` = shuffle the
+    phrase's steps (same hits, new order — the break dice; UNDO walks it back).
+    `>KIT` is **zero-copy**: all pads reference slices of the original sample,
+    so it works even when all 64 SampleBank slots are occupied.
+  - waveform gestures: **tap** a marker or region = select + audition that
+    slice; **drag from a marker** = move it. To delete, select a slice and press
+    the explicit `DEL` button — double-tap deletion was removed because it is
+    unreliable on the 3DS resistive touchscreen. The first cut at frame zero is
+    locked; after deletion selection advances right (or left at the end).
+    Marker movement snaps to zero crossings automatically (no clicks).
+  - `>PHR` is the one-button break workflow: the instrument flips to
+    chromatic-slice mode and each slice lands on the step nearest its real
+    position in time (quantized to the 16-step grid), so uneven transient
+    chops keep their groove. press play and the break plays like the source —
+    then shuffle steps, reverse a slice, add `RET`, transpose in the chain.
+  - re-pressing `>KIT` on an existing `chop NN` kit **rebuilds** its pads from
+    the current markers (move a marker, press again, pads follow).
+  - note: `TRNS`/`EQ`/`CLR` reset per-slice reverse flags, since re-chopping
+    renumbers the slices.
 - **LOAD** — WAV browser over `sdmc:/3ds/descry/wav/` (subfolders work).
   up/down select, A opens a folder / loads a file. 8/16/24/32-bit PCM and
   float WAVs are resampled to 32 kHz on load.
@@ -454,7 +485,8 @@ playing step. both are undoable (ZL+B).
   the mix is now an instrument. see 4/sampler.
 - **sample editor** — the sampler's **WAVE** tab: normalize, reverse, fade
   in/out, gain ±3 dB, crop, copy to another slot, root note, start/end
-  markers. **SLICE** tab: manual chops, auto-slice ×16, chop→kit.
+  markers. **SLICE** tab: transient/equal auto-chop, tap-to-audition,
+  chop→kit, slices→phrase.
 - recorded/loaded samples persist as `sample_XX.s16` on the SD card.
 
 ---

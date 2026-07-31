@@ -17,6 +17,10 @@ static void rebuild_table(int sr) {
     cached_sample_rate = sr;
 }
 
+void warmup_pitch_table(int sample_rate) {
+    if (sample_rate != cached_sample_rate) rebuild_table(sample_rate);
+}
+
 q16 note_to_phase_inc(int note, int sample_rate) {
     if (sample_rate != cached_sample_rate) rebuild_table(sample_rate);
     if (note < 0) note = 0;

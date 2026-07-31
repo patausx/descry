@@ -52,6 +52,9 @@ const char* fm_op_wave_name(int idx);       // "SIN"/"TRI"/"SAW"/"SQR"
 uint8_t fm_algo_carrier_mask(int algo);
 uint8_t fm_algo_mod_mask(int algo, int op);
 
+// Build FM oscillator lookup tables outside the first-note realtime path.
+void warmup_fm();
+
 // === voice ===
 class FmSynth : public audio::Voice {
 public:
@@ -84,6 +87,12 @@ public:
         fx::q31 env   = 0;          // q30
         fx::q31 release_start = 0;
         uint32_t stage_pos = 0;
+        // Cached envelope rate; parameter edits invalidate via the compact keys.
+        Stage rate_stage = Stage::Idle;
+        uint16_t rate_duration = 0xFFFF;
+        uint8_t rate_sustain = 0xFF;
+        fx::q31 env_step = 1;
+        fx::q31 env_target = 0;
         // last output (q15) - for feedback
         fx::q15 last_out = 0;
     };

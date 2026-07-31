@@ -29,6 +29,8 @@ public:
     // buffer starvation events since boot (all wave buffers DONE at once = the
     // dsp ran out of audio -> audible click). read from the UI for diagnosis.
     uint32_t underruns() const { return xrun_count_; }
+    uint32_t render_last_us() const { return render_last_us_; }
+    uint32_t render_max_us() const { return render_max_us_; }
 
     // called from the worker thread (via trampoline). DO NOT CALL directly.
     void worker_loop();
@@ -51,6 +53,8 @@ private:
     std::atomic<bool>     thread_run_{false};
     bool           initialized_ = false;
     std::atomic<uint32_t> xrun_count_{0};   // starvation events (see underruns())
+    std::atomic<uint32_t> render_last_us_{0}; // latest 1024-frame render wall time
+    std::atomic<uint32_t> render_max_us_{0};  // boot-session high-water mark
     std::atomic<bool>     primed_{false};   // first buffer submitted (gates xrun counting)
     int stall_cycles_ = 0;               // watchdog: cycles with buffers queued but channel silent
 };

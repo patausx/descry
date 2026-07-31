@@ -37,6 +37,12 @@ void sample_gain_db(Sample& s, int delta_db);           // +/-1..3 dB, clamps
 void sample_fade_in(Sample& s, uint32_t a, uint32_t b);   // raw data index range
 void sample_fade_out(Sample& s, uint32_t a, uint32_t b);
 void sample_auto_slice(Sample& s, int n_chops);         // spread N chops evenly
+// transient auto-slice: detect drum hits by energy onsets and drop a chop on
+// each (snapped to zero crossings). sensitivity 0..255: higher = more chops
+// (lower detection threshold). returns the number of chops placed.
+int  sample_auto_slice_transients(Sample& s, int sensitivity = 128);
 int  sample_chop_count(const Sample& s);
+// sorted list of valid chop frames. out must hold Sample::MAX_CHOPS. returns count.
+int  sample_chops_sorted(const Sample& s, uint32_t* out);
 
 } // namespace trackr::synth

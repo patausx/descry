@@ -1,6 +1,7 @@
 #include "drum_gen.h"
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 
 namespace trackr::synth {
 
@@ -39,6 +40,7 @@ static inline fx::q15 mix(fx::q15 a, double v) {
 // === init_sample helper ===
 static void init_sample(Sample& s, std::size_t frames, int root_note) {
     s.data.assign(frames, 0);
+    std::snprintf(s.name, sizeof(s.name), "generated");
     s.channels   = 1;
     s.root_note  = root_note;
     s.loop_start = 0;
@@ -371,6 +373,7 @@ void generate_drum(Sample& dst, DrumType type) {
         case DrumType::Pad:       gen_pad(dst);        break;
         default: break;
     }
+    std::snprintf(dst.name, sizeof(dst.name), "%s", drum_type_name(type));
 }
 
 } // namespace trackr::synth

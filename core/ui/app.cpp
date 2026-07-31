@@ -483,6 +483,13 @@ void App::draw_scope_fullscreen(Draw& d) {
     std::snprintf(buf, sizeof(buf), "BPM%03d", project_.song.bpm);
     d.text(340, 2, buf, pal::FG_DIM, 1);
     d.text(6, H - 10, "L+SELECT — exit scope", pal::FG_DIM, 1);
+    // realtime diagnosis: one buffer has a 32ms wall deadline.
+    char perf[40];
+    std::snprintf(perf, sizeof(perf), "DSP %lu.%lums MAX %lu.%lums",
+                  (unsigned long)(debug_render_us / 1000), (unsigned long)((debug_render_us % 1000) / 100),
+                  (unsigned long)(debug_render_max_us / 1000), (unsigned long)((debug_render_max_us % 1000) / 100));
+    d.text(130, H - 10, perf, debug_render_max_us > 24000 ? pal::RECORD : pal::FG_DIM, 1);
+
     // underrun diagnosis: shows real starvation events on-device. 0 = clean;
     // a growing number while playing = the synth can't keep the dsp fed.
     if (debug_xruns > 0) {
@@ -808,14 +815,17 @@ void App::draw_bottom(Draw& d) {
     // === contextual hints removed (user: clean UI) ===
     // quick sample bank status
     {
-        auto& s = synth::SampleBank::instance().slot(cur_sample_);
-        char sb[40];
+        auto& bank = synth::SampleBank::instance();
+        auto& s = bank.slot(cur_sample_);
+        char sb[64];
+        const unsigned ram_mb10 = (unsigned)(bank.bytes_used() * 10 / (1024 * 1024));
         if (s.data.empty()) {
-            std::snprintf(sb, sizeof(sb), "S%02d:EMPTY", cur_sample_);
+            std::snprintf(sb, sizeof(sb), "S%02d:EMPTY  RAM %u.%u/32M", cur_sample_, ram_mb10 / 10, ram_mb10 % 10);
             d.text(8, 18, sb, pal::RECORD);
         } else {
-            float sec = s.data.size() / 32000.0f;
-            std::snprintf(sb, sizeof(sb), "S%02d:%.1fs", cur_sample_, sec);
+            float sec = s.num_frames() / (float)synth::SAMPLER_SR;
+            if (s.name[0]) std::snprintf(sb, sizeof(sb), "S%02d:%.18s  %u.%uM", cur_sample_, s.name, ram_mb10 / 10, ram_mb10 % 10);
+            else           std::snprintf(sb, sizeof(sb), "S%02d:%.1fs  RAM %u.%u/32M", cur_sample_, sec, ram_mb10 / 10, ram_mb10 % 10);
             d.text(8, 18, sb, pal::PLAY);
         }
     }

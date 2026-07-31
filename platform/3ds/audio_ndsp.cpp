@@ -218,6 +218,7 @@ void Audio3DS::worker_loop() {
             // RecursiveLock - the UI may be doing replace_voice() at this time and it will wait.
             // advance/render are interleaved at tick boundaries so note-ons land
             // sample-accurate inside the buffer (fixes tempo jitter up to 32ms).
+            const uint64_t render_begin = svcGetSystemTick();
             {
                 audio::Mixer::LockGuard _g(*mixer_);
                 auto* out = reinterpret_cast<fx::q15*>(buf_data_[idx]);
@@ -230,6 +231,13 @@ void Audio3DS::worker_loop() {
                     done += n;
                 }
             }
+            const uint64_t render_ticks = svcGetSystemTick() - render_begin;
+            const uint32_t render_us = (uint32_t)(render_ticks * 1000000ULL / SYSCLOCK_ARM11);
+            render_last_us_.store(render_us, std::memory_order_relaxed);
+            uint32_t prev_max = render_max_us_.load(std::memory_order_relaxed);
+            while (render_us > prev_max &&
+                   !render_max_us_.compare_exchange_weak(prev_max, render_us,
+                                                         std::memory_order_relaxed)) {}
 
             DSP_FlushDataCache(buf_data_[idx],
                               FRAMES_PER_BUF * 2 * sizeof(int16_t));

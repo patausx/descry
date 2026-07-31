@@ -91,6 +91,39 @@ void Mixer::cut_slot_voices(int sample_slot) {
     }
 }
 
+Voice* Mixer::start_preview_voice(Voice* v, int note, int velocity) {
+    if (!v) return nullptr;
+    LockGuard _g(*this);
+    delete preview_voice_;
+    preview_voice_ = nullptr;
+    v->note_on(note, velocity);
+    if (!v->active()) { delete v; return nullptr; }
+    preview_voice_ = v;
+    return v;
+}
+
+void Mixer::stop_preview_voice() {
+    LockGuard _g(*this);
+    delete preview_voice_;
+    preview_voice_ = nullptr;
+}
+
+void Mixer::cut_preview_voices() {
+    LockGuard _g(*this);
+    delete preview_voice_;
+    preview_voice_ = nullptr;
+    // Also clean up preview-tagged voices created by intermediate/older code.
+    for (auto& t : tracks_) {
+        for (int s = 0; s < TRACK_POLY; ++s) {
+            if (t.voices[s] && t.voices[s]->current_sample_slot() == -2) {
+                delete t.voices[s];
+                t.voices[s] = nullptr;
+                t.voice_age[s] = 0;
+            }
+        }
+    }
+}
+
 Voice* Mixer::primary_voice(int i) {
     LockGuard _g(*this);
     auto& t = tracks_[i];
@@ -135,14 +168,32 @@ void Mixer::clear_voices(int i) {
 
 // === resample/bounce capture ===
 void Mixer::start_resample(std::size_t max_frames) {
-    // allocate a stereo buffer (interleaved L/R)
-    resample_buf_.assign(max_frames * 2, 0);
+    // Multi-megabyte allocation/zeroing happens before taking the realtime lock.
+    std::vector<fx::q15> fresh(max_frames * 2, 0);
+    LockGuard _g(*this);
+    resample_active_.store(false, std::memory_order_relaxed);
+    resample_buf_.swap(fresh);
     resample_max_ = max_frames;
     resample_pos_ = 0;
-    resample_active_ = true;
+    resample_active_.store(true, std::memory_order_release);
 }
 void Mixer::stop_resample() {
-    resample_active_ = false;
+    LockGuard _g(*this);
+    resample_active_.store(false, std::memory_order_release);
+}
+std::size_t Mixer::resample_frames() {
+    LockGuard _g(*this);
+    return resample_pos_;
+}
+bool Mixer::take_resample(std::vector<fx::q15>& out, std::size_t& frames) {
+    LockGuard _g(*this);
+    if (resample_active_.load(std::memory_order_relaxed) || resample_pos_ == 0) return false;
+    frames = resample_pos_;
+    resample_buf_.resize(frames * 2); // shrink only; no allocation
+    out = std::move(resample_buf_);
+    resample_pos_ = 0;
+    resample_max_ = 0;
+    return true;
 }
 
 // === per-track DSP fx (MG + filter + bitcrush + downsample) ===
@@ -424,9 +475,33 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
             else t.meter = (fx::q15)((int32_t)t.meter * 7 / 8);
         }
 
+        // Dedicated browser preview is intentionally outside TrackState: no mute,
+        // fader, filter, poly compensation, or sequencer voice stealing. Mix it
+        // dry at a conservative level directly into the master accumulators.
+        if (preview_voice_) {
+            bool alive = preview_voice_->render(voice_buf_, chunk);
+            constexpr fx::q15 PREVIEW_GAIN = (fx::q15)(fx::Q15_ONE * 70 / 100);
+            for (std::size_t i = 0; i < chunk; ++i) {
+                master_l_[i] += fx::mul_q15(voice_buf_[i*2 + 0], PREVIEW_GAIN);
+                master_r_[i] += fx::mul_q15(voice_buf_[i*2 + 1], PREVIEW_GAIN);
+            }
+            if (!alive) {
+                delete preview_voice_;
+                preview_voice_ = nullptr;
+            }
+        }
+
         // === FX buses → delay (ping-pong) + reverb, now fed independently ===
         // buses can be larger than q15 (several tracks with send). compress with headroom
         // instead of a hard clip: >>2 = -12dB at the delay/reverb input
+
+        // Empty-delay bypass: count occupied ring cells exactly, so projects with
+        // no DEL send do not stream/write the 32KB delay ring every sample.
+        bool del_bus_silent = true;
+        for (std::size_t i = 0; i < chunk; ++i) {
+            if (del_bus_l_[i] != 0 || del_bus_r_[i] != 0) { del_bus_silent = false; break; }
+        }
+        const bool delay_active = !del_bus_silent || delay_nonzero_ != 0;
 
         // auto-bypass: if the whole chunk in rev_bus = 0, don't process reverb BUT keep the tail alive
         // (the reverb tail sustains itself via feedback - cutting it on the first silent chunk = clipping the reverb with a cliff)
@@ -452,7 +527,7 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
 
             fx::q15 wet_l = 0, wet_r = 0;
 
-            {
+            if (delay_active) {
                 // === DELAY (ping-pong) ===
                 std::size_t read_pos = (delay_pos + DELAY_BUF - delay_time) % DELAY_BUF;
                 fx::q15 d_l = delay_l[read_pos];
@@ -461,12 +536,19 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
                 fx::q15 fb_l = fx::mul_q15(d_r, delay_feedback);
                 fx::q15 fb_r = fx::mul_q15(d_l, delay_feedback);
 
-                delay_l[delay_pos] = fx::sat_q15((fx::q31)in_dl + fb_l);
-                delay_r[delay_pos] = fx::sat_q15((fx::q31)in_dr + fb_r);
+                const fx::q15 old_l = delay_l[delay_pos];
+                const fx::q15 old_r = delay_r[delay_pos];
+                const fx::q15 new_l = fx::sat_q15((fx::q31)in_dl + fb_l);
+                const fx::q15 new_r = fx::sat_q15((fx::q31)in_dr + fb_r);
+                if (old_l != 0) --delay_nonzero_;
+                if (old_r != 0) --delay_nonzero_;
+                if (new_l != 0) ++delay_nonzero_;
+                if (new_r != 0) ++delay_nonzero_;
+                delay_l[delay_pos] = new_l;
+                delay_r[delay_pos] = new_r;
 
                 wet_l = fx::mul_q15(d_l, delay_wet);
                 wet_r = fx::mul_q15(d_r, delay_wet);
-
                 delay_pos = (delay_pos + 1) % DELAY_BUF;
             }
 
@@ -556,13 +638,14 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
     }
 
     // resample/bounce - record master output into an internal buffer
-    if (resample_active_ && resample_pos_ < resample_max_) {
+    if (resample_active_.load(std::memory_order_relaxed) && resample_pos_ < resample_max_) {
         std::size_t avail = resample_max_ - resample_pos_;
         std::size_t copy  = (frames < avail) ? frames : avail;
         std::memcpy(resample_buf_.data() + resample_pos_ * 2,
                     out, copy * 2 * sizeof(fx::q15));
         resample_pos_ += copy;
-        if (resample_pos_ >= resample_max_) resample_active_ = false;     // auto-stop on overflow
+        if (resample_pos_ >= resample_max_)
+            resample_active_.store(false, std::memory_order_release); // auto-stop on overflow
     }
 }
 

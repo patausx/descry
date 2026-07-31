@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include <algorithm>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -171,13 +172,13 @@ void App::edit_dsn_row(synth::DsnSynthParams& dp, seq::Instrument& inst, int del
 // === Sampler instrument layout (M8-style param list) ===
 // row indices for the Sampler instrument editor.
 enum SamplerRow {
-    SR_TYPE = 0, SR_SAMPLE, SR_PLAY, SR_SLICE, SR_START, SR_LENGTH,
-    SR_LOOP_S, SR_LOOP_E, SR_DETUNE, SR_ATTACK, SR_RELEASE, SR_TABLE,
+    SR_TYPE = 0, SR_SAMPLE, SR_PLAY, SR_SLICE, SR_SYNC, SR_START, SR_LENGTH,
+    SR_LOOP_S, SR_LOOP_E, SR_DETUNE, SR_ATTACK, SR_RELEASE, SR_TABLE, SR_PAD,
     SAMPLER_ROWS
 };
 static const char* const kSamplerRowNames[SAMPLER_ROWS] = {
-    "TYPE  ", "SAMPLE", "PLAY  ", "SLICE ", "START ", "LENGTH",
-    "LOOP-S", "LOOP-E", "DETUNE", "ATK   ", "REL   ", "TABLE ",
+    "TYPE  ", "SAMPLE", "PLAY  ", "SLICE ", "SYNC  ", "START ", "LENGTH",
+    "LOOP-S", "LOOP-E", "DETUNE", "ATK   ", "REL   ", "TABLE ", "      ",
 };
 
 
@@ -216,6 +217,17 @@ void App::edit_sampler_row(synth::SamplerParams& sp, seq::Instrument& inst, int 
             sp.slice = (uint8_t)v;
             break;
         }
+        case SR_SYNC: {
+            // 0 = OFF (play at root pitch), 1..8 = "the sample is N bars long",
+            // repitched to fit N bars at the project tempo
+            int v = (int)sp.sync_bars + (delta > 0 ? 1 : (delta < 0 ? -1 : 0));
+            if (v < 0) v = 0;
+            if (v > 8) v = 8;
+            sp.sync_bars = (uint8_t)v;
+            break;
+        }
+        case SR_PAD:
+            break;
         case SR_START: {
             int v = (int)sp.start + delta * STEP;
             if (v < 0) v = 0;
@@ -275,25 +287,64 @@ void App::edit_sampler_row(synth::SamplerParams& sp, seq::Instrument& inst, int 
 
 // === bottom-screen M8-style slice editor panel ===
 // drawn in the keyboard zone when inst_slice_panel_ is on (Sampler instrument).
-// v2: fat action buttons + waveform with numbered chop tabs. all touch.
+// v4 (break-machine workflow):
+//   TRNS = transient auto-chop (cycles LO/MID/HI sensitivity per press)
+//   EQ n = equal slice (cycles 4/8/16/32 per press)
+//   REV  = toggle per-slice reverse on the selected slice
+//   DEL/CLR = marker ops, >KIT = chops to DrumKit, >PHR = chops to phrase,
+//   SHUF = shuffle the current phrase's steps (break re-sequence dice)
+//   waveform: TAP = select+audition, DRAG marker = move (zero-cross snapped)
+//   deletion is deliberately ONLY via DEL: double-tap is unreliable on the
+//   3DS resistive touch panel and used to delete/add the wrong boundary.
 namespace {
     constexpr int SL_X = 4, SL_W = 312;
-    constexpr int SLB_Y = 108, SLB_H = 18, SLB_W = 78;   // 4 action buttons
+    constexpr int SLB_Y = 108, SLB_H = 18, SLB_W = 39;   // 8 action buttons
     constexpr int SL_Y = 134, SL_H = 76;                 // waveform box
     constexpr int SL_INFO = 218;
-    static const char* const kSliceOps[4] = { "AUTO16", "DEL", "CLR", ">KIT" };
+    static const int kEqCounts[4] = { 4, 8, 16, 32 };
+    static const int kSensVals[3] = { 80, 150, 220 };    // LO MID HI
+    static const char* const kSensNames[3] = { "LO", "MID", "HI" };
+}
+
+// audition one slice (1-based idx, 0 = whole) on track 0 through the
+// instrument's own fx defaults - same path as the touch keyboard preview.
+void App::preview_slice(int slice_1based) {
+    auto& inst = project_.instruments[cur_inst_];
+    if (inst.type != seq::InstrumentType::Sampler) return;
+    auto* v = static_cast<synth::Sampler*>(project_.make_voice(cur_inst_));
+    if (!v) return;
+    v->params.slice = (uint8_t)slice_1based;
+    v->params.chromatic_slices = false;
+    auto& s = synth::SampleBank::instance().slot(inst.sampler.sample_slot);
+    seq::Player::apply_inst_fx_defaults(inst, mixer_.track(0));
+    mixer_.start_voice(0, v, s.root_note, 110);
 }
 
 void App::draw_slice_panel(Draw& d, int slot) {
     auto& s = synth::SampleBank::instance().slot(slot);
-    auto& sp = project_.instruments[cur_inst_].sampler;
-    (void)sp;
 
     // === action buttons (fat, obviously tappable) ===
-    for (int i = 0; i < 4; ++i) {
+    char eq_lbl[8];
+    std::snprintf(eq_lbl, sizeof(eq_lbl), "EQ%d", kEqCounts[smp_eq_idx_ & 3]);
+    const char* ops[8] = { "TRNS", eq_lbl, "REV", "DEL", "CLR", ">KIT", ">PHR", "SHUF" };
+    // REV lights up when the selected slice is reversed
+    bool sel_rev = false;
+    {
+        uint32_t srt[synth::Sample::MAX_CHOPS];
+        int nn = s.empty() ? 0 : synth::sample_chops_sorted(s, srt);
+        if (nn && smp_chop_sel_ >= 0 && smp_chop_sel_ < synth::Sample::MAX_CHOPS &&
+            s.chops[smp_chop_sel_] != 0xFFFFFFFFu) {
+            for (int k = 0; k < nn; ++k)
+                if (srt[k] == s.chops[smp_chop_sel_]) {
+                    sel_rev = (s.slice_rev_mask >> k) & 1u; break;
+                }
+        }
+    }
+    for (int i = 0; i < 8; ++i) {
         int x = SL_X + i * SLB_W;
-        ui_button(d, x, SLB_Y, SLB_W - 3, SLB_H, pal::BG_HI, pal::GRID,
-                  kSliceOps[i], s.empty() ? pal::FG_DIM : pal::FG);
+        const bool hot = (i == 2 && sel_rev);
+        ui_button(d, x, SLB_Y, SLB_W - 3, SLB_H, hot ? pal::CURSOR : pal::BG_HI, pal::GRID,
+                  ops[i], s.empty() ? pal::FG_DIM : (hot ? pal::PANEL : pal::FG), hot);
     }
 
     // === waveform box ===
@@ -308,13 +359,23 @@ void App::draw_slice_panel(Draw& d, int slot) {
         return SL_X + (int)((uint64_t)f * SL_W / total);
     };
 
-    int cnt = 0;
-    for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i)
-        if (s.chops[i] != 0xFFFFFFFFu) ++cnt;
+    uint32_t sorted[synth::Sample::MAX_CHOPS];
+    int cnt = s.empty() ? 0 : synth::sample_chops_sorted(s, sorted);
 
     if (s.empty()) {
         d.text(SL_X + SL_W / 2 - 60, SL_Y + SL_H / 2 - 4, "EMPTY - REC WITH ZR", pal::FG_DIM);
     } else {
+        // selected slice region shading (marker -> next sorted marker / end)
+        uint32_t sel_f = (smp_chop_sel_ >= 0 && smp_chop_sel_ < synth::Sample::MAX_CHOPS)
+                       ? s.chops[smp_chop_sel_] : 0xFFFFFFFFu;
+        if (sel_f != 0xFFFFFFFFu) {
+            uint32_t sel_end = total;
+            for (int i = 0; i < cnt; ++i)
+                if (sorted[i] > sel_f && sorted[i] < sel_end) sel_end = sorted[i];
+            int ax = f2x(sel_f), bx = f2x(sel_end);
+            if (bx > ax) d.rect(ax, SL_Y, bx - ax, SL_H, with_alpha(pal::CURSOR, 26));
+        }
+
         // waveform (min/max per column, decimated)
         for (int x = 0; x < SL_W; ++x) {
             uint32_t a = ((uint64_t)x * total) / SL_W;
@@ -336,8 +397,8 @@ void App::draw_slice_panel(Draw& d, int slot) {
             d.rect(SL_X + x, yt, 1, yb - yt + 1, pal::PLAY_BG);
         }
 
-        // chop markers: numbered TAB at the top + full-height post.
-        // selected = cursor color, breathing, fatter post.
+        // chop markers: numbered TAB at the top (sorted order = the note/step
+        // that plays it via >PHR) + full-height post.
         for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) {
             uint32_t cf = s.chops[i];
             if (cf == 0xFFFFFFFFu) continue;
@@ -348,14 +409,27 @@ void App::draw_slice_panel(Draw& d, int slot) {
                 uint8_t br = breathe_pulse(frame_, 64);
                 col = lerp_color(with_alpha(pal::CURSOR, 150), pal::CURSOR, br);
             } else col = pal::FG_HEX;
-            // grab tab hanging from the top edge (9x10) with the hex number
-            int tx = cx - 4; if (tx < SL_X) tx = SL_X;
-            d.rect(tx, SL_Y - 11, 9, 10, sel ? col : pal::BG_HI);
-            char nb[3]; std::snprintf(nb, sizeof(nb), "%X", i);
-            d.text(tx + 2, SL_Y - 10, nb, sel ? pal::PANEL : col);
+            // sorted rank for the label (what >PHR / chromatic notes address)
+            int rank = 0;
+            for (int k = 0; k < cnt; ++k) if (sorted[k] == cf) { rank = k; break; }
+            const bool rev = (s.slice_rev_mask >> rank) & 1u;
+            int tx = cx - 6; if (tx < SL_X) tx = SL_X;
+            if (tx > SL_X + SL_W - 14) tx = SL_X + SL_W - 14;
+            d.rect(tx, SL_Y - 11, 14, 10, sel ? col : pal::BG_HI);
+            char nb[4]; std::snprintf(nb, sizeof(nb), "%X", rank);
+            d.text(tx + (rank < 16 ? 4 : 1), SL_Y - 10, nb, sel ? pal::PANEL : col);
             // post
             d.rect(cx, SL_Y, 1, SL_H, col);
             if (sel) d.rect(cx + 1, SL_Y, 1, SL_H, with_alpha(col, 120));
+            // reversed slice: back-arrow ticks along the bottom of its region
+            if (rev) {
+                uint32_t rend = total;
+                for (int k = 0; k < cnt; ++k)
+                    if (sorted[k] > cf && sorted[k] < rend) rend = sorted[k];
+                int rx0 = cx, rx1 = f2x(rend);
+                for (int xx = rx0 + 2; xx < rx1 - 1; xx += 6)
+                    d.rect(xx, SL_Y + SL_H - 3, 3, 2, pal::FG_HEX);
+            }
         }
 
         // live playhead
@@ -369,16 +443,18 @@ void App::draw_slice_panel(Draw& d, int slot) {
         }
     }
 
-    // === info line: state on the left, gesture help on the right ===
+    // === info line: status/state left, gesture help right ===
     char ib[48];
-    if (cnt > 0 && smp_chop_sel_ >= 0 && s.chops[smp_chop_sel_] != 0xFFFFFFFFu && total) {
+    if (smp_status_[0]) {
+        std::snprintf(ib, sizeof(ib), "%s", smp_status_);
+    } else if (cnt > 0 && smp_chop_sel_ >= 0 && s.chops[smp_chop_sel_] != 0xFFFFFFFFu && total) {
         int pct = (int)((uint64_t)s.chops[smp_chop_sel_] * 100 / total);
-        std::snprintf(ib, sizeof(ib), "%d CHOPS  SEL %X @%d%%", cnt, smp_chop_sel_, pct);
+        std::snprintf(ib, sizeof(ib), "%d CHOPS  SEL @%d%%", cnt, pct);
     } else {
         std::snprintf(ib, sizeof(ib), "%d CHOPS", cnt);
     }
     d.text(SL_X, SL_INFO, ib, pal::FG);
-    d.text(SL_X + 150, SL_INFO, "TAP=ADD/SEL  DRAG=MOVE", pal::FG_DIM);
+    d.text(SL_X + 168, SL_INFO, "TAP=SELECT/PLAY  DEL=REMOVE", pal::FG_DIM);
 }
 
 // touch handler for the slice panel. buttons row + tap/drag on the waveform.
@@ -388,27 +464,100 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
     // === action buttons (tap only) ===
     if (!is_move && y >= SLB_Y && y < SLB_Y + SLB_H) {
         int i = (x - SL_X) / SLB_W;
-        if (i < 0 || i > 3 || s.empty()) return;
-        uint32_t total = s.num_frames();
+        if (i < 0 || i > 7 || s.empty()) return;
         switch (i) {
-            case 0:   // AUTO16: even slice across the whole sample
-                for (int k = 0; k < synth::Sample::MAX_CHOPS; ++k)
-                    s.chops[k] = (uint32_t)((uint64_t)k * total / synth::Sample::MAX_CHOPS);
+            case 0: {  // TRNS: transient auto-chop, press again = next sensitivity
+                int n = synth::sample_auto_slice_transients(s, kSensVals[smp_auto_sens_ % 3]);
+                std::snprintf(smp_status_, sizeof(smp_status_), "TRNS %s: %d CHOPS",
+                              kSensNames[smp_auto_sens_ % 3], n);
+                smp_auto_sens_ = (smp_auto_sens_ + 1) % 3;
                 smp_chop_sel_ = 0;
+                s.slice_rev_mask = 0;   // ranks changed - stale flags would hit wrong slices
                 break;
-            case 1:   // DEL: remove the selected chop, select the next live one
-                if (smp_chop_sel_ >= 0 && smp_chop_sel_ < synth::Sample::MAX_CHOPS) {
-                    s.chops[smp_chop_sel_] = 0xFFFFFFFFu;
-                    for (int k = 0; k < synth::Sample::MAX_CHOPS; ++k)
-                        if (s.chops[k] != 0xFFFFFFFFu) { smp_chop_sel_ = k; break; }
+            }
+            case 1: {  // EQ: equal slice, press again = next count
+                int n = kEqCounts[smp_eq_idx_ & 3];
+                synth::sample_auto_slice(s, n);
+                std::snprintf(smp_status_, sizeof(smp_status_), "EQUAL %d", n);
+                smp_eq_idx_ = (smp_eq_idx_ + 1) & 3;
+                smp_chop_sel_ = 0;
+                s.slice_rev_mask = 0;
+                break;
+            }
+            case 2: {  // REV: toggle per-slice reverse on the selected slice
+                uint32_t srt[synth::Sample::MAX_CHOPS];
+                int nn = synth::sample_chops_sorted(s, srt);
+                if (nn == 0 || smp_chop_sel_ < 0 ||
+                    smp_chop_sel_ >= synth::Sample::MAX_CHOPS ||
+                    s.chops[smp_chop_sel_] == 0xFFFFFFFFu) {
+                    std::snprintf(smp_status_, sizeof(smp_status_), "NO SLICE SELECTED");
+                    break;
                 }
+                int rank = -1;
+                for (int k = 0; k < nn; ++k)
+                    if (srt[k] == s.chops[smp_chop_sel_]) { rank = k; break; }
+                if (rank < 0) break;
+                s.slice_rev_mask ^= (1u << rank);
+                const bool on = (s.slice_rev_mask >> rank) & 1u;
+                std::snprintf(smp_status_, sizeof(smp_status_), "SLICE %X REV %s",
+                              rank, on ? "ON" : "OFF");
+                preview_slice(rank + 1);   // hear it immediately
                 break;
-            case 2:   // CLR: wipe all chops
-                for (int k = 0; k < synth::Sample::MAX_CHOPS; ++k) s.chops[k] = 0xFFFFFFFFu;
+            }
+            case 3: { // DEL: delete selected boundary, then select next by position
+                if (smp_chop_sel_ < 0 || smp_chop_sel_ >= synth::Sample::MAX_CHOPS ||
+                    s.chops[smp_chop_sel_] == 0xFFFFFFFFu) {
+                    std::snprintf(smp_status_, sizeof(smp_status_), "NO SLICE SELECTED");
+                    break;
+                }
+
+                uint32_t srt[synth::Sample::MAX_CHOPS];
+                int nn = synth::sample_chops_sorted(s, srt);
+                uint32_t dead_frame = s.chops[smp_chop_sel_];
+                int rank = -1;
+                for (int k = 0; k < nn; ++k)
+                    if (srt[k] == dead_frame) { rank = k; break; }
+
+                // Frame zero anchors slice 0. Removing it makes the leading
+                // audio unreachable and renumbers every pad/note, so protect it.
+                if (dead_frame == 0 || rank == 0) {
+                    std::snprintf(smp_status_, sizeof(smp_status_), "FIRST CUT IS LOCKED");
+                    break;
+                }
+
+                // Decide selection before mutation: next marker on the right,
+                // or the previous marker when deleting the final boundary.
+                uint32_t next_frame = (rank + 1 < nn) ? srt[rank + 1] : srt[rank - 1];
+                s.chops[smp_chop_sel_] = 0xFFFFFFFFu;
+
+                // REV bits are indexed by sorted slice rank. Remove the bit at
+                // `rank` and shift all higher bits down with the surviving cuts.
+                uint32_t low_mask = (rank == 0) ? 0u : ((1u << rank) - 1u);
+                uint32_t low = s.slice_rev_mask & low_mask;
+                uint32_t high = (rank >= 31) ? 0u : (s.slice_rev_mask >> (rank + 1));
+                s.slice_rev_mask = low | (high << rank);
+
                 smp_chop_sel_ = 0;
+                for (int k = 0; k < synth::Sample::MAX_CHOPS; ++k)
+                    if (s.chops[k] == next_frame) { smp_chop_sel_ = k; break; }
+                smp_drag_kind_ = 0;
+                std::snprintf(smp_status_, sizeof(smp_status_), "CUT %X DELETED", rank);
                 break;
-            case 3:   // >KIT: spread chops onto a DrumKit
+            }
+            case 4:   // CLR: wipe all chops
+                for (int k = 0; k < synth::Sample::MAX_CHOPS; ++k) s.chops[k] = 0xFFFFFFFFu;
+                s.slice_rev_mask = 0;
+                smp_chop_sel_ = 0;
+                std::snprintf(smp_status_, sizeof(smp_status_), "CLEARED");
+                break;
+            case 5:   // >KIT: spread chops onto a DrumKit
                 make_kit_from_sample(slot);
+                break;
+            case 6:   // >PHR: spread chops onto the current phrase
+                spread_slices_to_phrase(slot);
+                break;
+            case 7:   // SHUF: shuffle the phrase's steps (break dice)
+                shuffle_phrase_steps();
                 break;
         }
         mark_dirty();
@@ -426,16 +575,20 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
     uint32_t frame = (uint32_t)((uint64_t)cx * total / SL_W);
 
     if (is_move) {
-        // drag the selected chop
-        if (smp_chop_sel_ >= 0 && smp_chop_sel_ < synth::Sample::MAX_CHOPS &&
+        // drag the selected chop (zero-crossing snapped) - but ONLY if this
+        // touch started ON the marker (smp_drag_kind_ 5). a tap inside a
+        // region auditions the slice; sliding the finger there must not
+        // yank the marker around.
+        if (smp_drag_kind_ == 5 &&
+            smp_chop_sel_ >= 0 && smp_chop_sel_ < synth::Sample::MAX_CHOPS &&
             s.chops[smp_chop_sel_] != 0xFFFFFFFFu) {
-            s.chops[smp_chop_sel_] = frame;
+            s.chops[smp_chop_sel_] = synth::find_zero_crossing_near(s, frame);
             mark_dirty();
         }
         return;
     }
 
-    // tap: find nearest existing chop within ~12px (or its top tab)
+    // nearest existing chop within ~12px
     int best = -1; uint32_t best_d = 0xFFFFFFFFu;
     for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) {
         uint32_t cf = s.chops[i];
@@ -444,18 +597,42 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
         uint32_t dd = (uint32_t)std::abs(ckx - cx);
         if (dd < best_d) { best_d = dd; best = i; }
     }
-    if (best >= 0 && best_d <= 12) {
-        smp_chop_sel_ = best;            // select existing
+    const bool near_marker = (best >= 0 && best_d <= 12);
+    smp_drag_kind_ = near_marker ? 5 : 0;   // arm marker drag only from the marker
+
+    // Tap only selects and auditions. Marker creation/deletion is never hidden
+    // behind timing-sensitive gestures; auto/equal slicing creates boundaries,
+    // DEL removes the selected one.
+    smp_status_[0] = 0;
+
+    // select + AUDITION the slice under the finger.
+    // NB: engine addresses slices by SORTED rank, smp_chop_sel_ is the raw
+    // array index - convert before previewing.
+    uint32_t sorted2[synth::Sample::MAX_CHOPS];
+    int n_sorted = synth::sample_chops_sorted(s, sorted2);
+    auto rank_of = [&](int arr_idx) -> int {
+        uint32_t f = s.chops[arr_idx];
+        for (int k = 0; k < n_sorted; ++k) if (sorted2[k] == f) return k;
+        return 0;
+    };
+    if (near_marker) {
+        smp_chop_sel_ = best;
+        preview_slice(rank_of(best) + 1);
+        return;
+    }
+    // tap inside a region: find the chop whose region contains the frame
+    int owner = -1; uint32_t owner_f = 0;
+    for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) {
+        uint32_t cf = s.chops[i];
+        if (cf == 0xFFFFFFFFu || cf > frame) continue;
+        if (owner < 0 || cf > owner_f) { owner = i; owner_f = cf; }
+    }
+    if (owner >= 0) {
+        smp_chop_sel_ = owner;
+        preview_slice(rank_of(owner) + 1);
     } else {
-        // place into the first empty slot
-        int put = -1;
-        for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i)
-            if (s.chops[i] == 0xFFFFFFFFu) { put = i; break; }
-        if (put >= 0) {
-            s.chops[put] = frame;
-            smp_chop_sel_ = put;
-            mark_dirty();
-        }
+        // before the first marker - audition the whole sample
+        preview_slice(0);
     }
 }
 
@@ -585,42 +762,52 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
         uint32_t efr = sfr + (((uint64_t)sp.length * total) >> 15);
         // data-index range (frames * channels) for the fade ops
         uint32_t da = sfr * s.channels, db = efr * s.channels;
-        // audio-thread safety: a sampler voice reads s.data across renders and
-        // trim/reverse can realloc the vector under it (use-after-free). cut
-        // every voice on this slot and hold the lock for the whole edit - a
-        // destructive edit is not a performance path, one clipped buffer is
-        // infinitely better than heap corruption.
-        audio::Mixer::LockGuard _g(mixer_);
-        mixer_.cut_slot_voices(slot);
-        switch (i) {
-            case 0: synth::sample_normalize(s); break;
-            case 1: synth::sample_reverse(s);   break;
-            case 2: synth::sample_fade_in(s, da, db);  break;
-            case 3: synth::sample_fade_out(s, da, db); break;
-            case 4: synth::sample_gain_db(s, +3); break;
-            case 5: synth::sample_gain_db(s, -3); break;
-            case 6:   // CROP to the current start/length window, then reset window
-                synth::sample_trim_norm(s, sp.start, sp.length);
+        // Audio-thread safety without realtime stalls: perform the O(N) edit on
+        // a private copy, then hold the mixer lock only for cut + move publish.
+        if (i == 7) {  // COPY the window into the first free bank slot
+            int free_slot = -1;
+            for (int k = 0; k < synth::SAMPLE_BANK_SIZE; ++k) {
+                if (synth::SampleBank::instance().slot(k).data.empty()) { free_slot = k; break; }
+            }
+            if (free_slot >= 0 && efr > sfr) {
+                synth::Sample copy;
+                copy.data.assign(s.data.begin() + (size_t)sfr * s.channels,
+                                 s.data.begin() + (size_t)efr * s.channels);
+                copy.channels = s.channels;
+                std::snprintf(copy.name, sizeof(copy.name), "%.24s copy", s.name[0] ? s.name : "sample");
+                copy.root_note = s.root_note;
+                auto& bank = synth::SampleBank::instance();
+                if (!bank.can_replace(free_slot, copy)) {
+                    std::snprintf(smp_status_, sizeof(smp_status_), "SAMPLE RAM FULL");
+                    return;
+                }
+                {
+                    audio::Mixer::LockGuard _g(mixer_);
+                    mixer_.cut_slot_voices(free_slot);
+                    synth::SampleBank::instance().slot(free_slot) = std::move(copy);
+                }
+                std::snprintf(smp_status_, sizeof(smp_status_), "COPIED > SLOT %02d", free_slot);
+            }
+        } else {
+            synth::Sample edited = s;   // heap/O(N), deliberately outside audio lock
+            switch (i) {
+                case 0: synth::sample_normalize(edited); break;
+                case 1: synth::sample_reverse(edited);   break;
+                case 2: synth::sample_fade_in(edited, da, db);  break;
+                case 3: synth::sample_fade_out(edited, da, db); break;
+                case 4: synth::sample_gain_db(edited, +3); break;
+                case 5: synth::sample_gain_db(edited, -3); break;
+                case 6: synth::sample_trim_norm(edited, sp.start, sp.length); break;
+                default: return;
+            }
+            {
+                audio::Mixer::LockGuard _g(mixer_);
+                mixer_.cut_slot_voices(slot);
+                s = std::move(edited);
+            }
+            if (i == 6) {
                 sp.start = 0;
                 sp.length = fx::Q15_ONE;
-                break;
-            case 7: {  // COPY the window into the first free bank slot
-                int free_slot = -1;
-                for (int k = 0; k < synth::SAMPLE_BANK_SIZE; ++k) {
-                    if (synth::SampleBank::instance().slot(k).data.empty()) { free_slot = k; break; }
-                }
-                if (free_slot >= 0 && efr > sfr) {
-                    auto& dst = synth::SampleBank::instance().slot(free_slot);
-                    dst.data.assign(s.data.begin() + (size_t)sfr * s.channels,
-                                    s.data.begin() + (size_t)efr * s.channels);
-                    dst.channels  = s.channels;
-                    dst.root_note = s.root_note;
-                    dst.loop_start = 0;
-                    dst.loop_end   = 0;
-                    for (int c = 0; c < synth::Sample::MAX_CHOPS; ++c) dst.chops[c] = 0xFFFFFFFFu;
-                    std::snprintf(smp_status_, sizeof(smp_status_), "COPIED > SLOT %02d", free_slot);
-                }
-                break;
             }
         }
         mark_dirty();
@@ -778,17 +965,21 @@ int App::gen_drum_to_pad(int pad, int drum_type) {
         if (slot < 0) return -1;   // bank full
         inst.drumkit.slots[pad] = (uint8_t)slot;
     }
-    auto& s = synth::SampleBank::instance().slot(slot);
+    synth::Sample generated;
+    synth::generate_drum(generated, (synth::DrumType)drum_type); // slow transcendentals: no lock
+    std::snprintf(generated.name, sizeof(generated.name), "%s",
+                  synth::drum_type_name((synth::DrumType)drum_type));
+    if (!synth::SampleBank::instance().can_replace(slot, generated)) {
+        std::snprintf(smp_status_, sizeof(smp_status_), "SAMPLE RAM FULL");
+        return -1;
+    }
     {
-        // the pad may be re-generated while its previous sound still rings -
-        // generate_drum resizes s.data under any live voice (UAF). cut first.
+        // Publish in constant time; a ringing old pad is cut before its source moves.
         audio::Mixer::LockGuard _g(mixer_);
         mixer_.cut_slot_voices(slot);
-        synth::generate_drum(s, (synth::DrumType)drum_type);
+        synth::SampleBank::instance().slot(slot) = std::move(generated);
     }
     mark_dirty();
-
-    // instant preview: hear what landed on the pad
     mixer_.start_voice(0, project_.make_voice(cur_inst_), inst.drumkit.base_note + pad, 110);
     return slot;
 }
@@ -842,7 +1033,10 @@ void App::draw_load_panel(Draw& d, int slot) {
     d.text(PX + 2, PY + 2, "LOAD WAV", pal::HEADER);
     {
         char hb[48];
-        std::snprintf(hb, sizeof(hb), "/%s", wav_subpath_[0] ? wav_subpath_ : "");
+        const char* sub = wav_subpath_[0] ? wav_subpath_ : "";
+        std::size_t sl = std::strlen(sub);
+        std::snprintf(hb, sizeof(hb), sl > 42 ? "/...%.41s" : "/%.45s",
+                      sl > 42 ? sub + sl - 41 : sub);
         d.text(PX + 70, PY + 2, hb, pal::FG_DIM);
     }
 
@@ -854,7 +1048,7 @@ void App::draw_load_panel(Draw& d, int slot) {
     if (wav_count_ == 0) {
         d.text(PX + 6, LIST_Y + 4, "NO WAV FILES", pal::FG_DIM);
         d.text(PX + 6, LIST_Y + 16, "(put in sdmc:/3ds/descry/wav)", pal::FG_DIM);
-        d.text(PX + 2, HINT_Y, "R+SELECT=RESCAN  (tab KB to close)", pal::FG_DIM);
+        d.text(PX + 2, HINT_Y, "X=PREVIEW A=LOAD  Y=RESCAN  B=BACK", pal::FG_DIM);
         return;
     }
 
@@ -887,7 +1081,11 @@ void App::draw_load_panel(Draw& d, int slot) {
     if (top > 0)                    d.text(PX + PW - 12, LIST_Y, "^", pal::FG_DIM);
     if (top + VISIBLE < wav_count_) d.text(PX + PW - 12, LIST_Y + (VISIBLE - 1) * ROW_H, "v", pal::FG_DIM);
 
-    d.text(PX + 2, HINT_Y, "A=OPEN/LOAD  UP/DN=SEL  (tab KB to close)", pal::FG_DIM);
+    if (smp_status_[0]) {
+        d.text(PX + 2, HINT_Y, smp_status_, pal::FG_HEX);
+    } else {
+        d.text(PX + 2, HINT_Y, "X=PREVIEW A=LOAD  Y=RESCAN B=BACK", pal::FG_DIM);
+    }
 }
 
 // input handler for the WAV loader panel. ports the Screen::Sample LOAD logic:
@@ -895,7 +1093,19 @@ void App::draw_load_panel(Draw& d, int slot) {
 void App::load_panel_input(const InputState& in, int slot) {
     auto& s = synth::SampleBank::instance().slot(slot);
     constexpr const char* WAV_ROOT = "sdmc:/3ds/descry/wav";
-    char curdir[160];
+    auto stop_preview = [&]() {
+        mixer_.cut_preview_voices();
+        wav_preview_sample_.data.clear();
+        wav_preview_active_ = false;
+    };
+    auto basename_to_sample_name = [](const char* file, char* dst, std::size_t cap) {
+        std::size_t n = std::strlen(file);
+        if (n >= 4 && file[n-4] == '.') n -= 4;
+        if (n >= cap) n = cap - 1;
+        std::memcpy(dst, file, n);
+        dst[n] = 0;
+    };
+    char curdir[260];
     if (wav_subpath_[0])
         std::snprintf(curdir, sizeof(curdir), "%s/%s", WAV_ROOT, wav_subpath_);
     else
@@ -919,10 +1129,17 @@ void App::load_panel_input(const InputState& in, int slot) {
                 const char* name = ent->d_name;
                 if (name[0] == '.') continue;   // hidden and ./..
                 std::size_t len = std::strlen(name);
+                if (len >= MAX_WAV_NAME) continue; // never display a name we cannot reopen exactly
                 bool is_dir = (ent->d_type == DT_DIR);
+                if (ent->d_type == DT_UNKNOWN) {
+                    char candidate[320];
+                    int cn = std::snprintf(candidate, sizeof(candidate), "%s/%s", curdir, name);
+                    struct stat st{};
+                    is_dir = (cn > 0 && cn < (int)sizeof(candidate) &&
+                              ::stat(candidate, &st) == 0 && S_ISDIR(st.st_mode));
+                }
                 if (is_dir) {
-                    std::strncpy(wav_files_[wav_count_], name, 39);
-                    wav_files_[wav_count_][39] = 0;
+                    std::snprintf(wav_files_[wav_count_], MAX_WAV_NAME, "%s", name);
                     wav_is_dir_[wav_count_] = true;
                     ++wav_count_;
                 } else if (len >= 5) {
@@ -931,8 +1148,7 @@ void App::load_panel_input(const InputState& in, int slot) {
                         (ext[1] == 'w' || ext[1] == 'W') &&
                         (ext[2] == 'a' || ext[2] == 'A') &&
                         (ext[3] == 'v' || ext[3] == 'V')) {
-                        std::strncpy(wav_files_[wav_count_], name, 39);
-                        wav_files_[wav_count_][39] = 0;
+                        std::snprintf(wav_files_[wav_count_], MAX_WAV_NAME, "%s", name);
                         wav_is_dir_[wav_count_] = false;
                         ++wav_count_;
                     }
@@ -949,12 +1165,64 @@ void App::load_panel_input(const InputState& in, int slot) {
         if (in.up)   wav_sel_ = (wav_sel_ - 1 + wav_count_) % wav_count_;
         if (in.down) wav_sel_ = (wav_sel_ + 1) % wav_count_;
     }
-    // R+SELECT = rescan
-    if (in.select_ && in.held_r) {
+    // Y = rescan. R+SELECT cannot work here: platform input reserves it for
+    // screenshots before App sees the frame.
+    if (in.y) {
+        stop_preview();
         wav_scanned_ = false;
+        smp_status_[0] = 0;
         return;
     }
-    // A = enter folder / load file
+    // B = stop audition; if already stopped, walk to the parent folder.
+    if (in.b) {
+        if (wav_preview_active_) {
+            stop_preview();
+            std::snprintf(smp_status_, sizeof(smp_status_), "PREVIEW STOPPED");
+        } else if (wav_subpath_[0]) {
+            char* sl = std::strrchr(wav_subpath_, '/');
+            if (sl) *sl = 0; else wav_subpath_[0] = 0;
+            wav_sel_ = 0;
+            wav_scanned_ = false;
+            smp_status_[0] = 0;
+        }
+        return;
+    }
+    // X = non-destructive audition of the highlighted WAV. Decode outside the
+    // audio lock; cut the old external-source voice before swapping its buffer.
+    if (in.x && wav_count_ > 0 && !wav_is_dir_[wav_sel_]) {
+        char path[320];
+        std::snprintf(path, sizeof(path), "%s/%s", curdir, wav_files_[wav_sel_]);
+        // Stop/free the previous preview before decoding the next one so peak
+        // memory is one preview buffer, not old+new+decoder output.
+        if (wav_preview_active_) stop_preview();
+        synth::Sample tmp;
+        constexpr int PREVIEW_FRAMES = 32000 * 5;
+        auto r = synth::load_wav_to_sample(path, tmp, 32000, PREVIEW_FRAMES);
+        if ((int)r >= 0) {
+            basename_to_sample_name(wav_files_[wav_sel_], tmp.name, sizeof(tmp.name));
+            wav_preview_sample_ = std::move(tmp);
+            std::snprintf(wav_preview_name_, sizeof(wav_preview_name_), "%s", wav_files_[wav_sel_]);
+            auto* v = new synth::Sampler();
+            v->params = synth::SamplerParams{};
+            v->params.release = 0;
+            v->set_external_sample(&wav_preview_sample_);
+            if (mixer_.start_preview_voice(v, wav_preview_sample_.root_note, 110)) {
+                wav_preview_active_ = true;
+                std::snprintf(smp_status_, sizeof(smp_status_), "%s%s",
+                              r == synth::WavLoadResult::Truncated ? "PREVIEW 5S: " : "PREVIEW: ",
+                              wav_preview_sample_.name);
+            } else {
+                wav_preview_active_ = false;
+                std::snprintf(smp_status_, sizeof(smp_status_), "PREVIEW FAILED");
+            }
+        } else {
+            wav_preview_sample_.data.clear();
+            wav_preview_active_ = false;
+            std::snprintf(smp_status_, sizeof(smp_status_), "PREVIEW: %s", synth::wav_result_str(r));
+        }
+        return;
+    }
+    // A = enter folder / import file into the selected bank slot.
     if (in.a && wav_count_ > 0) {
         if (wav_is_dir_[wav_sel_]) {
             if (std::strcmp(wav_files_[wav_sel_], "..") == 0) {
@@ -964,9 +1232,19 @@ void App::load_panel_input(const InputState& in, int slot) {
             } else {
                 if (wav_subpath_[0]) {
                     std::size_t l = std::strlen(wav_subpath_);
+                    const std::size_t need = l + 1 + std::strlen(wav_files_[wav_sel_]) + 1;
+                    if (need > sizeof(wav_subpath_)) {
+                        std::snprintf(smp_status_, sizeof(smp_status_), "PATH TOO LONG");
+                        return;
+                    }
                     std::snprintf(wav_subpath_ + l, sizeof(wav_subpath_) - l, "/%s", wav_files_[wav_sel_]);
                 } else {
+                    if (std::strlen(wav_files_[wav_sel_]) >= sizeof(wav_subpath_)) {
+                        std::snprintf(smp_status_, sizeof(smp_status_), "PATH TOO LONG");
+                        return;
+                    }
                     std::strncpy(wav_subpath_, wav_files_[wav_sel_], sizeof(wav_subpath_) - 1);
+                    wav_subpath_[sizeof(wav_subpath_) - 1] = 0;
                 }
             }
             wav_sel_ = 0;
@@ -977,19 +1255,37 @@ void App::load_panel_input(const InputState& in, int slot) {
         // decode to a TEMP sample first (SD I/O must stay outside the audio
         // lock), then swap into the bank under the lock with the slot's voices
         // cut - the old vector dies here and any live reader would be UAF.
-        char path[200];
+        char path[320];
         std::snprintf(path, sizeof(path), "%s/%s", curdir, wav_files_[wav_sel_]);
         constexpr int MAX_FRAMES = 32000 * 15;     // 15 sec hard cap
+        const std::size_t avail_bytes = synth::SampleBank::instance().bytes_available_replacing(slot);
+        const int budget_frames = (int)(avail_bytes / (2 * sizeof(fx::q15))); // worst-case stereo
+        if (budget_frames <= 0) {
+            std::snprintf(smp_status_, sizeof(smp_status_), "LOAD: SAMPLE RAM FULL");
+            return;
+        }
         synth::Sample tmp;
-        auto r = synth::load_wav_to_sample(path, tmp, 32000, MAX_FRAMES);
+        auto r = synth::load_wav_to_sample(path, tmp, 32000,
+                                            budget_frames < MAX_FRAMES ? budget_frames : MAX_FRAMES);
         if ((int)r >= 0) {
+            basename_to_sample_name(wav_files_[wav_sel_], tmp.name, sizeof(tmp.name));
+            stop_preview();
+            if (!synth::SampleBank::instance().can_replace(slot, tmp)) {
+                std::snprintf(smp_status_, sizeof(smp_status_), "LOAD: SAMPLE RAM FULL");
+                return;
+            }
             {
                 audio::Mixer::LockGuard _g(mixer_);
                 mixer_.cut_slot_voices(slot);
                 s = std::move(tmp);
             }
             mark_dirty();
-            inst_panel_ = InstPanel::Kb;   // close panel on success
+            std::snprintf(smp_status_, sizeof(smp_status_), "%s: %s",
+                          r == synth::WavLoadResult::Truncated ? "LOADED 15S" : "LOADED", s.name);
+            // Keep LOAD open: A loads, X auditions, and the user can immediately
+            // compare/import another file without reopening the tab.
+        } else {
+            std::snprintf(smp_status_, sizeof(smp_status_), "LOAD: %s", synth::wav_result_str(r));
         }
         return;
     }
@@ -1029,7 +1325,14 @@ bool App::inst_tab_touch(int x, int y) {
     for (int i = 0; i < TAB_N; ++i) {
         int bx = tab_x(i);
         if (x >= bx && x < bx + TAB_W) {
-            inst_panel_ = (InstPanel)i;
+            InstPanel next = (InstPanel)i;
+            if (inst_panel_ == InstPanel::Load && next != InstPanel::Load) {
+                mixer_.cut_preview_voices();
+                wav_preview_sample_.data.clear();
+                wav_preview_active_ = false;
+                smp_status_[0] = 0;
+            }
+            inst_panel_ = next;
             if (inst_panel_ == InstPanel::Load) wav_scanned_ = false;   // rescan on opening LOAD
             mark_dirty();
             return true;
@@ -1149,6 +1452,14 @@ void App::update_instrument(const InputState& in) {
     auto& inst = project_.instruments[cur_inst_];
     const bool is_drum = (inst.type == seq::InstrumentType::DrumKit);
 
+    // LOAD browser owns navigation/actions before the hidden instrument grid can
+    // react to the same D-pad press. X previews, A imports, B stops/goes up,
+    // Y rescans (R+SELECT is globally consumed by screenshot handling).
+    if (inst.type == seq::InstrumentType::Sampler && inst_panel_ == InstPanel::Load) {
+        load_panel_input(in, inst.sampler.sample_slot);
+        return;
+    }
+
     // FX defaults section: ZL+SELECT toggles focus; while focused it owns the input.
     // skip on None (no instrument). returns true -> early-out, normal nav suppressed.
     if (inst.type != seq::InstrumentType::None) {
@@ -1224,11 +1535,6 @@ post_nav:
     // (panel switching is done via the KB/SLICE/LOAD tab buttons on the bottom
     //  screen - see instrument_tab_touch(). START stays as global play/stop.)
 
-    // when the load panel is active, up/down/A drive the browser, not row editing.
-    if (is_sampler && inst_panel_ == InstPanel::Load) {
-        load_panel_input(in, inst.sampler.sample_slot);
-        return;
-    }
     int delta = 0;
     // when a bottom panel is open, A/B drive panel actions (handled below),
     // not row editing - so suppress delta entirely in that mode.
@@ -2007,7 +2313,7 @@ void App::draw_instrument(Draw& d) {
         auto& sp = inst.sampler;
         auto& smp = synth::SampleBank::instance().slot(sp.sample_slot);
         constexpr int SROW_H = 22;
-        constexpr int HALF = SAMPLER_ROWS / 2;   // 6 rows per column
+        constexpr int HALF = SAMPLER_ROWS / 2;   // 7 rows per column
         // column geometry: left starts at x=14, right at x=206. each column
         // has a label (NAME) and a value (VAL) offset.
         for (int i = 0; i < SAMPLER_ROWS; ++i) {
@@ -2030,12 +2336,19 @@ void App::draw_instrument(Draw& d) {
                     d.text(VX, y, "SAMPLER", pal::FG);
                     break;
                 case SR_SAMPLE:
-                    if (smp.empty())
+                    if (smp.empty()) {
                         std::snprintf(vb, sizeof(vb), "%02d (EMPTY)", sp.sample_slot);
-                    else
-                        std::snprintf(vb, sizeof(vb), "%02d  %.2fs", sp.sample_slot,
+                        d.text(VX, y, vb, pal::FG_DIM);
+                    } else {
+                        std::snprintf(vb, sizeof(vb), "%02d %.1fs", sp.sample_slot,
                                       smp.num_frames() / (float)synth::SAMPLER_SR);
-                    d.text(VX, y, vb, smp.empty() ? pal::FG_DIM : pal::FG);
+                        d.text(VX, y, vb, pal::FG);
+                        if (smp.name[0]) {
+                            char nb[20];
+                            std::snprintf(nb, sizeof(nb), "%.18s", smp.name);
+                            d.text(VX, y + 9, nb, pal::FG_HEX);
+                        }
+                    }
                     break;
                 case SR_PLAY:
                     d.text(VX, y, synth::play_mode_name(sp.play_mode), pal::FG_HEX);
@@ -2049,6 +2362,26 @@ void App::draw_instrument(Draw& d) {
                         std::snprintf(vb, sizeof(vb), "%d", sp.slice);
                         d.text(VX, y, vb, pal::FG);
                     }
+                    break;
+                case SR_SYNC:
+                    if (sp.sync_bars == 0) {
+                        d.text(VX, y, "OFF", pal::FG_DIM);
+                    } else {
+                        // show the resulting repitch so it's obvious what it does:
+                        // "2BAR -3.1st" = fits 2 bars, pitched down 3.1 semitones
+                        uint32_t bf = synth::bar_frames_at_bpm(project_.song.bpm);
+                        uint32_t tot = smp.num_frames();
+                        if (bf && tot) {
+                            float r = (float)tot / (float)(bf * sp.sync_bars);
+                            float st = 12.0f * std::log2(r < 0.001f ? 0.001f : r);
+                            std::snprintf(vb, sizeof(vb), "%dBAR %+.1fst", sp.sync_bars, st);
+                        } else {
+                            std::snprintf(vb, sizeof(vb), "%dBAR", sp.sync_bars);
+                        }
+                        d.text(VX, y, vb, pal::FG_HEX);
+                    }
+                    break;
+                case SR_PAD:
                     break;
                 case SR_START: {
                     int pct = (int)((uint64_t)sp.start * 1000 / fx::Q15_ONE);
@@ -2146,7 +2479,9 @@ void App::draw_instrument(Draw& d) {
                         d.text(VX, y, pbuf, pal::FG_HEX);
                     }
                 } else if (inst.type == seq::InstrumentType::Sampler) {
-                    std::snprintf(buf, sizeof(buf), "SLOT %02d", inst.sampler.sample_slot);
+                    const auto& sn = synth::SampleBank::instance().slot(inst.sampler.sample_slot);
+                    if (sn.name[0]) std::snprintf(buf, sizeof(buf), "%02d %.20s", inst.sampler.sample_slot, sn.name);
+                    else            std::snprintf(buf, sizeof(buf), "SLOT %02d", inst.sampler.sample_slot);
                     d.text(VX, y, buf, pal::FG);
                 } else {
                     d.text(VX, y, "--", pal::FG_DIM);

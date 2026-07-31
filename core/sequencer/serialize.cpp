@@ -124,12 +124,20 @@ int validate_project(Project& p) {
                 sp.sample_slot = 0; ++fixed;
             }
             if (sp.slice > synth::Sample::MAX_CHOPS) { sp.slice = 0; ++fixed; }
+            if (sp.sync_bars > 8) { sp.sync_bars = 0; ++fixed; }
+            // bar_frames is recomputed from Song on every make_voice; a stale
+            // value from disk must never reach the rate math
+            sp.bar_frames = 0;
             if ((uint8_t)sp.play_mode >= (uint8_t)synth::PlayMode::Count) {
                 sp.play_mode = synth::PlayMode::Fwd; ++fixed;
             }
         }
         if (inst.type == InstrumentType::DrumKit) {
-            for (auto& sl : inst.drumkit.slots)
+            auto& dk = inst.drumkit;
+            if (dk.sliced_sample_enc > synth::SAMPLE_BANK_SIZE) {
+                dk.sliced_sample_enc = 0; ++fixed;
+            }
+            for (auto& sl : dk.slots)
                 if (sl != 0xFF && sl >= synth::SAMPLE_BANK_SIZE) { sl = 0xFF; ++fixed; }
         }
     }

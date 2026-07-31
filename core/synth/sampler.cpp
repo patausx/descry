@@ -22,6 +22,8 @@ static void build_semi_lut() {
     g_semi_lut_built = true;
 }
 
+void warmup_sampler() { build_semi_lut(); }
+
 // convert a semitone offset to a q16.16 ratio (via the table)
 // note here = "how many semitones from root"
 static inline int32_t semi_ratio_q16(int semitones_from_root) {
@@ -50,18 +52,8 @@ static inline fx::q15 hermite4_q15(fx::q15 y0, fx::q15 y1, fx::q15 y2, fx::q15 y
     // t in q15 (frac >> 1 to go 16-bit -> 15-bit)
     int32_t t = (int32_t)(frac >> 1);                // q15 [0, 32768)
 
-    // ((a*t/2 + b/2)*t + c/2)*t + d (+ accumulator correction for /2)
-    // safe to do via int64 to avoid overflow
-    int64_t acc = (int64_t)a * t;                    // q15 * q15 -> q30, *0.5 -> divide at the end
-    acc >>= 15;                                      // -> q15
-    acc += b;                                        // q15 (b in q0; we need b in the same scale - well, b is an int)
-    // simplify: recompute directly without a*0.5/b*0.5/c*0.5 - multiply everything by 2 for integer math
-    // -> out = (((a*t + b*2)/2*t + c*2)/2 *t + d*2)/2 ... messy. better to do it all in double inside. NO.
-    // let's redo it cleaner:
-
-    // full formula with explicit /2:
-    // out = ((a*t + b)*t + c)*t / 2 + d  where a=-y0+3y1-3y2+y3, b=2y0-5y1+4y2-y3, c=-y0+y2
-    // and t here is in [0,1]. in q15 scale:
+    // Full formula with explicit /2:
+    // out = ((a*t + b)*t + c)*t / 2 + d, with t in q15.
     int64_t at_b  = ((int64_t)a * t) >> 15;          // q15
     at_b += b;
     int64_t at_b_t_c = (at_b * t) >> 15;             // q15
@@ -100,7 +92,7 @@ void Sampler::note_on(int note, int velocity) {
         active_ = false;
         return;
     }
-    auto& s = SampleBank::instance().slot(params.sample_slot);
+    const Sample& s = *source_sample();
     if (s.empty()) { active_ = false; return; }
 
     uint32_t total = s.num_frames();
@@ -127,26 +119,39 @@ void Sampler::note_on(int note, int velocity) {
     // === slice selection ===
     // chromatic_slices: the played note (offset from root) selects the slice.
     // otherwise params.slice is used. slice 0 = whole sample (use start/length).
+    // slices are addressed in SORTED order (k-th marker left to right), not by
+    // chop array index - manual add/delete leaves holes and out-of-order
+    // entries, and note k jumping to a random region made chromatic play
+    // useless after hand editing.
+    uint32_t sorted[Sample::MAX_CHOPS];
+    int n_sorted = 0;
+    for (int i = 0; i < Sample::MAX_CHOPS; ++i)
+        if (s.chops[i] != 0xFFFFFFFFu && s.chops[i] < total) sorted[n_sorted++] = s.chops[i];
+    for (int i = 1; i < n_sorted; ++i) {
+        uint32_t v = sorted[i]; int j = i - 1;
+        while (j >= 0 && sorted[j] > v) { sorted[j + 1] = sorted[j]; --j; }
+        sorted[j + 1] = v;
+    }
+
     int slice_idx = 0;
     if (params.chromatic_slices) {
         int n = note - s.root_note;            // 0 = first slice
-        if (n >= 0 && n < Sample::MAX_CHOPS) slice_idx = n + 1;
+        if (n >= 0 && n < n_sorted) slice_idx = n + 1;
         else slice_idx = 0;                    // out of range -> whole sample
     } else {
         slice_idx = params.slice;
     }
-    if (slice_idx > 0 && slice_idx <= Sample::MAX_CHOPS) {
-        uint32_t a = s.chops[slice_idx - 1];
-        if (a != 0xFFFFFFFFu && a < total) {
-            // slice end = next valid chop after 'a', else play_end_/total
-            uint32_t b = total;
-            for (int i = 0; i < Sample::MAX_CHOPS; ++i) {
-                uint32_t c = s.chops[i];
-                if (c != 0xFFFFFFFFu && c > a && c < b) b = c;
-            }
-            play_start_ = a;
-            play_end_   = b;
-        }
+    // per-slice reverse (Sample::slice_rev_mask, bit = sorted rank)
+    bool slice_reverse = false;
+    if (slice_idx > 0 && slice_idx <= n_sorted) {
+        uint32_t a = sorted[slice_idx - 1];
+        // slice end = next sorted marker, else total. THRU mode (amigo-style):
+        // don't cut at the next marker - ring out to the end of the sample.
+        uint32_t b = (pm != PlayMode::Thru && slice_idx < n_sorted)
+                   ? sorted[slice_idx] : total;
+        play_start_ = a;
+        play_end_   = b;
+        slice_reverse = (s.slice_rev_mask >> (slice_idx - 1)) & 1u;
     }
 
     // loop boundaries - taken from the Sample itself (not from params)
@@ -170,6 +175,25 @@ void Sampler::note_on(int note, int velocity) {
     // (the note only chooses which slice, not the transposition)
     if (params.chromatic_slices) semis = 0;
     int32_t ratio_q16 = semi_ratio_q16(semis);
+
+    // === beat sync (REPITCH) ===
+    // stretch the WHOLE sample to sync_bars bars at the project tempo by
+    // scaling the playback rate: ratio = sample_len / target_len. classic
+    // akai/amiga behaviour - the pitch moves with the tempo, no time-stretch
+    // artifacts. applied before slicing math because every slice shares the
+    // same rate, so slice boundaries stay musically aligned.
+    if (params.sync_bars > 0 && params.bar_frames > 0 && total > 0) {
+        uint64_t target = (uint64_t)params.bar_frames * params.sync_bars;
+        if (target > 0) {
+            uint64_t r = ((uint64_t)total << 16) / target;
+            // sanity clamp: 1/8x .. 8x, so a wrong sync_bars can't produce a
+            // DC-slow crawl or a multi-MHz read that eats the audio thread
+            if (r < (1u << 13)) r = 1u << 13;
+            if (r > (8u << 16)) r = 8u << 16;
+            ratio_q16 = (int32_t)(((uint64_t)ratio_q16 * r) >> 16);
+        }
+    }
+
     // fine cents: +/-50 cents = +/-0.5 semitone. cheap via a linear approximation:
     // 2^(c/1200) ~= 1 + c*0.0005776 for small c. in q16: c * 0.0005776 * 65536 ~= c * 37.85
     if (params.fine_cents != 0) {
@@ -179,8 +203,10 @@ void Sampler::note_on(int note, int velocity) {
         ratio_q16 = (int32_t)r;
     }
 
-    // reverse: the sign of pos_inc becomes negative, and we start from the end of the window
-    if (want_reverse) {
+    // reverse: the sign of pos_inc becomes negative, and we start from the end of the window.
+    // per-slice reverse XORs the mode's direction, so a REV instrument with a
+    // reversed slice plays that one forwards.
+    if (want_reverse != slice_reverse) {
         pos_inc_ = -ratio_q16;
         pos_hi_ = (int64_t)play_end_ - 1;
         if (pos_hi_ < (int64_t)play_start_) pos_hi_ = play_start_;
@@ -202,6 +228,33 @@ void Sampler::note_on(int note, int velocity) {
     active_ = true;
 }
 
+void Sampler::refresh_env_rate() {
+    uint32_t duration = 0;
+    int32_t sustain = params.sustain;
+    switch (stage_) {
+        case Stage::Attack: duration = params.attack; break;
+        case Stage::Decay: duration = params.decay; break;
+        case Stage::Release: duration = params.release; sustain = (int32_t)(release_start_env_ >> 15); break;
+        default: return;
+    }
+    if (rate_stage_ == stage_ && rate_duration_ == duration && rate_sustain_ == sustain) return;
+    rate_stage_ = stage_; rate_duration_ = duration; rate_sustain_ = sustain;
+    constexpr fx::q31 ENV_ONE = (fx::q31)1 << 30;
+    if (stage_ == Stage::Attack) {
+        env_target_ = ENV_ONE;
+        env_step_ = duration ? ENV_ONE / (fx::q31)duration : ENV_ONE;
+    } else if (stage_ == Stage::Decay) {
+        env_target_ = (fx::q31)params.sustain << 15;
+        uint32_t d = duration ? duration : 1;
+        env_step_ = (ENV_ONE - env_target_) / (fx::q31)d;
+    } else {
+        env_target_ = 0;
+        uint32_t r = duration ? duration : 1;
+        env_step_ = release_start_env_ / (fx::q31)r;
+        if (env_step_ < 1) env_step_ = 1;
+    }
+}
+
 void Sampler::note_off() {
     if (!gated_) return;
     gated_ = false;
@@ -217,7 +270,7 @@ bool Sampler::render(fx::q15* out, std::size_t frames) {
         return false;
     }
 
-    auto& s = SampleBank::instance().slot(params.sample_slot);
+    const Sample& s = *source_sample();
     if (s.empty()) {
         // slot vanished mid-note (rec/load into it cut us... or should have).
         // zero the buffer before bailing: the mixer sums voice_buf_ regardless
@@ -247,9 +300,8 @@ bool Sampler::render(fx::q15* out, std::size_t frames) {
         // === ADSR envelope tick ===
         switch (stage_) {
             case Stage::Attack: {
-                if (params.attack > 0) {
-                    env_ += ENV_ONE / (fx::q31)params.attack;
-                }
+                refresh_env_rate();
+                env_ += env_step_;
                 if (env_ >= ENV_ONE || stage_pos_ >= params.attack) {
                     env_ = ENV_ONE;
                     stage_ = Stage::Decay;
@@ -262,11 +314,10 @@ bool Sampler::render(fx::q15* out, std::size_t frames) {
                     stage_ = Stage::Sustain;
                     env_ = (fx::q31)params.sustain << 15;   // q15 -> q30
                 } else {
-                    fx::q31 target = (fx::q31)params.sustain << 15;
-                    fx::q31 step = (ENV_ONE - target) / (fx::q31)params.decay;
-                    env_ -= step;
-                    if (env_ <= target || stage_pos_ >= params.decay) {
-                        env_ = target;
+                    refresh_env_rate();
+                    env_ -= env_step_;
+                    if (env_ <= env_target_ || stage_pos_ >= params.decay) {
+                        env_ = env_target_;
                         stage_ = Stage::Sustain;
                     }
                 }
@@ -285,9 +336,8 @@ bool Sampler::render(fx::q15* out, std::size_t frames) {
                     stage_ = Stage::Idle;
                     active_ = false;
                 } else {
-                    // linear (predictable, no "infinite tail")
-                    fx::q31 step = release_start_env_ / (fx::q31)params.release;
-                    env_ -= step;
+                    refresh_env_rate();
+                    env_ -= env_step_;
                     if (env_ <= 0 || stage_pos_ >= params.release) {
                         env_ = 0;
                         stage_ = Stage::Idle;

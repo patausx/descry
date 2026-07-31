@@ -24,7 +24,8 @@ enum class WavLoadResult : int8_t {
     UnsupportedFormat  = -6,    // ADPCM / unknown formatTag
     UnsupportedBits    = -7,    // 4-bit, 64-bit etc
     UnsupportedChannels = -8,   // >2 channels
-    Truncated          = 1,     // ok but truncated to max_frames
+    ReadError           = -9,    // short read / invalid seek / damaged file
+    Truncated           = 1,     // ok but truncated to max_frames
 };
 
 const char* wav_result_str(WavLoadResult r);

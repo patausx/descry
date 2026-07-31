@@ -153,6 +153,13 @@ void App::touch(int x, int y) {
                     load_panel_input(fake, project_.instruments[cur_inst_].sampler.sample_slot);
                 } else {
                     wav_sel_ = idx;
+                    // Selecting a row is a safe, cheap audition gesture. Folders
+                    // only select; files preview without replacing the bank slot.
+                    if (!wav_is_dir_[idx]) {
+                        InputState fake{};
+                        fake.x = true;
+                        load_panel_input(fake, project_.instruments[cur_inst_].sampler.sample_slot);
+                    }
                 }
             }
         }
@@ -180,27 +187,35 @@ void App::touch(int x, int y) {
         if (x >= BX && x < BX + BW && y >= BY && y < BY + BH) {
             constexpr std::size_t MAX_FRAMES = 32000 * 15;
             if (!mixer_.is_resampling()) {
-                mixer_.start_resample(MAX_FRAMES);
+                const std::size_t avail = synth::SampleBank::instance().bytes_available_replacing(
+                    project_.instruments[cur_inst_].sampler.sample_slot);
+                const std::size_t budget_frames = avail / (2 * sizeof(fx::q15));
+                if (budget_frames == 0) {
+                    std::snprintf(smp_status_, sizeof(smp_status_), "SAMPLE RAM FULL");
+                    return;
+                }
+                mixer_.start_resample(budget_frames < MAX_FRAMES ? budget_frames : MAX_FRAMES);
                 if (!player_.playing()) player_.play_song(0);
             } else {
                 mixer_.stop_resample();
-                std::size_t frames = mixer_.resample_frames();
-                if (frames > 0) {
+                std::vector<fx::q15> captured;
+                std::size_t frames = 0;
+                if (mixer_.take_resample(captured, frames) && frames > 0) {
                     int dst_slot = project_.instruments[cur_inst_].sampler.sample_slot;
-                    auto& s = synth::SampleBank::instance().slot(dst_slot);
-                    const fx::q15* src = mixer_.resample_data();
-                    // the destination slot may be sounding right now (we literally
-                    // just resampled the playing song) - assign() reallocs the
-                    // vector under any live voice. cut + swap under the lock.
+                    synth::Sample completed;
+                    completed.data = std::move(captured);
+                    std::snprintf(completed.name, sizeof(completed.name), "resample %02d", dst_slot);
+                    completed.channels  = 2;
+                    completed.root_note = 60;
+                    if (!synth::SampleBank::instance().can_replace(dst_slot, completed)) {
+                        std::snprintf(smp_status_, sizeof(smp_status_), "SAMPLE RAM FULL");
+                        return;
+                    }
+                    // Pointer-safe constant-time publish; the multi-megabyte
+                    // capture was moved out before this lock.
                     audio::Mixer::LockGuard _g(mixer_);
                     mixer_.cut_slot_voices(dst_slot);
-                    s.data.assign(src, src + frames * 2);
-                    s.channels   = 2;
-                    s.root_note  = 60;
-                    s.loop_start = 0;
-                    s.loop_end   = 0;
-                    s.reversed   = false;
-                    for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) s.chops[i] = 0xFFFFFFFFu;
+                    synth::SampleBank::instance().slot(dst_slot) = std::move(completed);
                     mark_dirty();
                 }
             }
