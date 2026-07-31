@@ -268,8 +268,9 @@ two-column param list: `TYPE / SAMPLE / PLAY / SLICE / SYNC / START / LENGTH` an
 the bottom screen has five tabs: **KB / WAVE / SLICE / LOAD / REC**.
 
 - **WAVE** — sample editor. op buttons: `NORM · REV · FAD< · FAD> · G+3 ·
-  G-3 · CROP · COPY`, drag the start/end markers on the waveform, A/B set the
-  root note.
+  G-3 · CROP · COPY · >WT`, drag the start/end markers on the waveform, A/B set
+  the root note. `X` or `>WT` converts the visible window into a normalized,
+  DC-free persistent USER wavetable and creates a Wavsynth instrument using it.
 - **SLICE** — the break chopper. up to 32 markers per sample.
   - buttons: `TRNS` = transient auto-chop (press again to cycle LO/MID/HI
     sensitivity), `EQ n` = equal slice (press again to cycle 4/8/16/32),
@@ -484,9 +485,9 @@ playing step. both are undoable (ZL+B).
   instrument's slot (up to 15 s, stereo). arm, perform (kaoss included), stop:
   the mix is now an instrument. see 4/sampler.
 - **sample editor** — the sampler's **WAVE** tab: normalize, reverse, fade
-  in/out, gain ±3 dB, crop, copy to another slot, root note, start/end
-  markers. **SLICE** tab: transient/equal auto-chop, tap-to-audition,
-  chop→kit, slices→phrase.
+  in/out, gain ±3 dB, crop, copy to another slot, root note, start/end markers,
+  or turn the window into a persistent wavetable (`X` / `>WT`). **SLICE** tab:
+  transient/equal auto-chop, tap-to-audition, chop→kit, slices→phrase.
 - recorded/loaded samples persist as `sample_XX.s16` on the SD card.
 
 ---

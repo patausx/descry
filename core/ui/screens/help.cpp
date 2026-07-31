@@ -145,6 +145,8 @@ static const char* const pg_files[] = {
     "",
     "mic: REC panel in a sampler instrument -",
     "record straight into a sample slot.",
+    "WAVE: X or >WT turns the visible window",
+    "into a persistent USER wavetable + WAV inst.",
     "WAVE tab: trim, normalize, fades, crop.",
     "SLICE tab: TRNS=transient chop (LO/MID/HI),",
     "EQ=equal 4/8/16/32, REV=reverse one slice,",

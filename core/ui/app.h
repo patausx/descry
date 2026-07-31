@@ -226,6 +226,10 @@ private:
     // create a Sampler instrument from the sample. returns inst id or -1.
     int make_sampler_inst_from_sample(int sample_slot);
 
+    // Render the sampler's current START/LENGTH window into a persistent capture
+    // wavetable, then create/select a Wavsynth instrument that uses it.
+    int make_wavetable_from_sample(int sample_slot);
+
     // === stick live-mod indicator state (set in update, read in draw_top) ===
     bool perf_lstick_on_ = false;    // left circle pad active this frame
     bool perf_cstick_on_ = false;    // right C-stick active this frame

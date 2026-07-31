@@ -3,6 +3,9 @@
 #include "../../audio/fixed.h"
 #include "../../synth/sample_utils.h"
 #include "../../synth/sampler.h"
+#include "../../synth/wavetable.h"
+#include "../../synth/wavsynth.h"
+#include "../../synth/wave_presets.h"
 #include <cstdio>
 #include <cstring>
 
@@ -38,6 +41,66 @@ void App::on_rec_done(int slot) {
     }
     cur_sample_ = (uint8_t)slot;
     mark_dirty();
+}
+
+int App::make_wavetable_from_sample(int sample_slot) {
+    const auto& src = synth::SampleBank::instance().slot(sample_slot);
+    if (src.empty()) { set_status(smp_status_, "NO SAMPLE"); return -1; }
+    const auto& sp = project_.instruments[cur_inst_].sampler;
+    const uint32_t total = src.num_frames();
+    uint32_t begin = (uint32_t)(((uint64_t)sp.start * total) >> 15);
+    uint32_t end = begin + (uint32_t)(((uint64_t)sp.length * total) >> 15);
+    if (end > total) end = total;
+    // Snap both edges across a wider musical window than normal trim dragging:
+    // captured regions often span many cycles, and matching low-amplitude seams
+    // matters more than preserving the exact pixel-selected frame.
+    const uint32_t radius = (end - begin) / 16 > 512 ? 512 : (end - begin) / 16;
+    begin = find_zero_crossing_near(src, begin, radius);
+    if (end < total) end = find_zero_crossing_near(src, end, radius);
+    if (end <= begin + 1) { set_status(smp_status_, "WINDOW TOO SHORT"); return -1; }
+
+    fx::q15 cycle[synth::WavetableBank::SIZE];
+    if (!synth::WavetableBank::prepare_capture(src, begin, end, cycle)) {
+        set_status(smp_status_, "WT: SILENT WINDOW"); return -1;
+    }
+
+    auto& bank = synth::WavetableBank::instance();
+    char wt_name[20];
+    int capture_count = 0;
+    for (int slot = synth::WavetableBank::FILE_SLOTS; slot < synth::WavetableBank::SLOTS; ++slot)
+        if (bank.occupied(slot)) ++capture_count;
+    std::snprintf(wt_name, sizeof(wt_name), "CAP%02d-%02d", sample_slot, capture_count + 1);
+    int wt_slot;
+    {
+        // Existing Wavsynth voices read the bank concurrently. Install is only
+        // 2KB, so serialize the short copy; preparation and file I/O stay out.
+        audio::Mixer::LockGuard _g(mixer_);
+        wt_slot = bank.install_capture(cycle, wt_name);
+    }
+    if (wt_slot < 0) { set_status(smp_status_, "WT CAPTURE BANK FULL"); return -1; }
+    if (!bank.save_captures("sdmc:/3ds/descry/wavetable")) {
+        audio::Mixer::LockGuard _g(mixer_);
+        bank.remove_capture(wt_slot);
+        set_status(smp_status_, "WT SAVE FAILED"); return -1;
+    }
+
+    int inst_id = -1;
+    for (int i = 1; i < seq::MAX_INSTRUMENTS; ++i) {
+        if (project_.instruments[i].type == seq::InstrumentType::None) { inst_id = i; break; }
+    }
+    if (inst_id < 0) { set_status(smp_status_, "WT OK / NO FREE INST"); return -1; }
+    auto& inst = project_.instruments[inst_id];
+    inst.type = seq::InstrumentType::Wavsynth;
+    inst.wavsynth = synth::WavsynthParams{};
+    inst.wavsynth.shape = synth::WaveShape::User;
+    inst.wavsynth.user_slot = (uint8_t)wt_slot;
+    inst.poly = true;
+    std::snprintf(inst.name, sizeof(inst.name), "%.15s", bank.name(wt_slot));
+    cur_inst_ = (uint8_t)inst_id;
+    wav_preset_idx_ = synth::WAVE_PRESET_COUNT + bank.index_of_slot(wt_slot);
+    std::snprintf(smp_status_, sizeof(smp_status_), "WT %02d > INST %02X", wt_slot, inst_id);
+    mark_dirty();
+    return inst_id;
 }
 
 int App::make_sampler_inst_from_sample(int sample_slot) {

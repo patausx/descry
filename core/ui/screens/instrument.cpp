@@ -642,12 +642,12 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
 //   loop points = ochre flags at the bottom. drag anywhere near a marker.
 namespace {
     constexpr int WV_X = 4,  WV_W = 312;
-    constexpr int WOP_Y = 108, WOP_H = 18, WOP_N = 8;
-    constexpr int WOP_W = 39;   // 8*39=312
+    constexpr int WOP_Y = 108, WOP_H = 18, WOP_N = 9;
+    constexpr int WOP_W = 34;   // nine ops; final WT button consumes the remainder
     constexpr int WV_Y = 134, WV_H = 76;
     constexpr int WV_INFO = 218;
     static const char* const kWaveOps[WOP_N] = {
-        "NORM", "REV", "FAD<", "FAD>", "G+3", "G-3", "CROP", "COPY"
+        "NORM", "REV", "FAD<", "FAD>", "G+3", "G-3", "CROP", "COPY", ">WT"
     };
 }
 
@@ -658,7 +658,8 @@ void App::draw_wave_panel(Draw& d, int slot) {
     // op buttons row (taller = tappable, tactile gradient)
     for (int i = 0; i < WOP_N; ++i) {
         int x = WV_X + i * WOP_W;
-        ui_button(d, x, WOP_Y, WOP_W - 3, WOP_H, pal::BG_HI, pal::GRID,
+        int w = (i == WOP_N - 1) ? (WV_X + WV_W - x) : WOP_W;
+        ui_button(d, x, WOP_Y, w - 2, WOP_H, pal::BG_HI, pal::GRID,
                   kWaveOps[i], s.empty() ? pal::FG_DIM : pal::FG);
     }
 
@@ -743,7 +744,7 @@ void App::draw_wave_panel(Draw& d, int slot) {
     std::snprintf(ib, sizeof(ib), "%.2fs  ROOT %s (A/B)  WIN %d-%d%%",
                   total / 32000.0f, rn, spct, spct + lpct > 100 ? 100 : spct + lpct);
     d.text(WV_X, WV_INFO, ib, pal::FG);
-    d.text(WV_X + 220, WV_INFO, "DRAG=MARKERS", pal::FG_DIM);
+    d.text(WV_X + 210, WV_INFO, "DRAG  X=>WT", pal::FG_DIM);
 }
 
 // touch: op buttons row OR drag nearest start/end marker.
@@ -762,6 +763,12 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
         uint32_t efr = sfr + (((uint64_t)sp.length * total) >> 15);
         // data-index range (frames * channels) for the fade ops
         uint32_t da = sfr * s.channels, db = efr * s.channels;
+        // >WT is non-destructive: render the visible window into a persistent
+        // oscillator cycle and switch to the newly created Wavsynth instrument.
+        if (i == 8) {
+            make_wavetable_from_sample(slot);
+            return;
+        }
         // Audio-thread safety without realtime stalls: perform the O(N) edit on
         // a private copy, then hold the mixer lock only for cut + move publish.
         if (i == 7) {  // COPY the window into the first free bank slot
@@ -1679,7 +1686,12 @@ post_nav:
                     // from the SD bank (shape=User + slot). one knob, whole palette.
                     const int user_n = synth::WavetableBank::instance().count();
                     const int total = synth::WAVE_PRESET_COUNT + user_n;
-                    int p = wav_preset_idx_ + delta;
+                    int current = wav_preset_idx_;
+                    if (inst.wavsynth.shape == synth::WaveShape::User) {
+                        int idx = synth::WavetableBank::instance().index_of_slot(inst.wavsynth.user_slot);
+                        if (idx >= 0) current = synth::WAVE_PRESET_COUNT + idx;
+                    }
+                    int p = current + delta;
                     while (p < 0) p += total;
                     p %= total;
                     wav_preset_idx_ = p;
@@ -1688,8 +1700,10 @@ post_nav:
                         std::snprintf(inst.name, sizeof(inst.name), "%s", synth::wave_preset_name((synth::WavePreset)p));
                     } else {
                         // keep the current envelope - just swap the oscillator table
+                        const int active_index = p - synth::WAVE_PRESET_COUNT;
+                        const int physical_slot = synth::WavetableBank::instance().slot_at(active_index);
                         inst.wavsynth.shape = synth::WaveShape::User;
-                        inst.wavsynth.user_slot = (uint8_t)(p - synth::WAVE_PRESET_COUNT);
+                        inst.wavsynth.user_slot = (uint8_t)(physical_slot >= 0 ? physical_slot : 0);
                         std::snprintf(inst.name, sizeof(inst.name), "%s",
                                       synth::WavetableBank::instance().name(inst.wavsynth.user_slot));
                     }
@@ -1793,6 +1807,11 @@ post_nav:
     // slice panel: X = spread chops onto a DrumKit (chop->kit, was R+SELECT in Sample view)
     if (is_sampler && inst_panel_ == InstPanel::Slice && in.x) {
         make_kit_from_sample(inst.sampler.sample_slot);
+        return;
+    }
+    // WAVE tab: X = capture the visible START/LENGTH window as a wavetable.
+    if (is_sampler && inst_panel_ == InstPanel::Wave && in.x) {
+        make_wavetable_from_sample(inst.sampler.sample_slot);
         return;
     }
     // WAVE panel: A/B = root note +/- (matches the "ROOT (A/B)" hint)
@@ -2468,6 +2487,8 @@ void App::draw_instrument(Draw& d) {
                     const int user_n = synth::WavetableBank::instance().count();
                     const int total = synth::WAVE_PRESET_COUNT + user_n;
                     if (inst.wavsynth.shape == synth::WaveShape::User) {
+                        int active_idx = synth::WavetableBank::instance().index_of_slot(inst.wavsynth.user_slot);
+                        if (active_idx >= 0) wav_preset_idx_ = synth::WAVE_PRESET_COUNT + active_idx;
                         std::snprintf(pbuf, sizeof(pbuf), "%d/%d USR:%s",
                             wav_preset_idx_ + 1, total,
                             synth::WavetableBank::instance().name(inst.wavsynth.user_slot));
