@@ -28,3 +28,6 @@ branding/wordmark_*.png
 _ex/
 _extracted/
 _wav/
+
+# built sample/wav libraries - third-party audio, lives in ~/descry-sidecars/dist
+dist/

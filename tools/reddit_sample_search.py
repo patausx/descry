@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Search Reddit sample-pack posts through public Atom search.rss feeds.
+
+Reddit JSON/HTML often returns 403/429 from headless/server networks. The RSS
+endpoint is lighter and still returns titles, post links, and external hrefs from
+post content.
+
+Examples:
+  python3 tools/reddit_sample_search.py jungle breaks amen
+  python3 tools/reddit_sample_search.py --subs Drumkits,DnBProduction,samplepacks "ambient sample pack"
+  python3 tools/reddit_sample_search.py --out /tmp/reddit_hits.md "noise textures"
+
+This tool only indexes links. It does not download or rehost any sample packs.
+"""
+from __future__ import annotations
+
+import argparse
+import html
+import os
+import re
+import time
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from typing import Iterable, List
+
+DEFAULT_SUBS = [
+    "Drumkits",
+    "DnBProduction",
+    "DnB",
+    "samplepacks",
+    "samplesforall",
+    "edmproduction",
+    "WeAreTheMusicMakers",
+    "ambientmusic",
+    "noisemusic",
+    "synthesizers",
+]
+
+DEFAULT_QUERIES = [
+    "jungle breaks",
+    "amen break",
+    "dnb sample pack",
+    "breakcore jungle",
+    "old school jungle",
+    "reese bass sample pack",
+    "ambient sample pack",
+    "field recordings sample pack",
+    "noise textures sample pack",
+    "industrial samples",
+]
+
+NS = {"a": "http://www.w3.org/2005/Atom"}
+
+
+@dataclass
+class Hit:
+    score: int
+    sub: str
+    query: str
+    title: str
+    date: str
+    reddit: str
+    links: List[str]
+
+
+def fetch(url: str, timeout: int = 25) -> bytes:
+    # Avoid inherited SOCKS/HTTP proxy weirdness unless the caller explicitly wants it.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) descry-sample-research/0.1",
+            "Accept": "application/atom+xml,application/xml,text/xml,*/*",
+        },
+    )
+    with opener.open(req, timeout=timeout) as r:
+        return r.read()
+
+
+def extract_links(content: str, reddit_link: str) -> List[str]:
+    content = html.unescape(content or "")
+    out: List[str] = []
+    for m in re.finditer(r'href="([^"]+)"', content):
+        h = html.unescape(m.group(1))
+        if h == reddit_link:
+            continue
+        if "reddit.com/user/" in h or "reddit.com/r/" in h:
+            continue
+        if h not in out:
+            out.append(h)
+    return out
+
+
+def score_hit(title: str, query: str, links: Iterable[str]) -> int:
+    text = (title + " " + query + " " + " ".join(links)).lower()
+    weights = [
+        ("jungle", 7),
+        ("amen", 7),
+        ("breakcore", 6),
+        ("break", 5),
+        ("dnb", 5),
+        ("drum", 2),
+        ("sample pack", 5),
+        ("pack", 2),
+        ("ambient", 5),
+        ("field", 4),
+        ("recording", 3),
+        ("noise", 5),
+        ("texture", 4),
+        ("industrial", 4),
+        ("reese", 4),
+        ("drive.google", 6),
+        ("dropbox", 6),
+        ("mediafire", 6),
+        ("mega.nz", 5),
+        ("archive.org", 4),
+        ("bandcamp", 3),
+        ("gumroad", 3),
+        ("zip", 3),
+        ("wav", 2),
+    ]
+    return sum(points for word, points in weights if word in text)
+
+
+def search(subs: List[str], queries: List[str], delay: float, max_entries: int) -> List[Hit]:
+    hits: List[Hit] = []
+    seen = set()
+    for sub in subs:
+        for query in queries:
+            url = (
+                f"https://www.reddit.com/r/{sub}/search.rss?"
+                f"q={urllib.parse.quote(query)}&restrict_sr=on&sort=relevance&t=all"
+            )
+            try:
+                data = fetch(url)
+                root = ET.fromstring(data)
+            except Exception as e:
+                title = f"RSS fetch failed: {e}"
+                hits.append(Hit(0, sub, query, title, "", url, []))
+                time.sleep(delay)
+                continue
+
+            for entry in root.findall("a:entry", NS)[:max_entries]:
+                title = (entry.findtext("a:title", default="", namespaces=NS) or "").strip()
+                date = (entry.findtext("a:updated", default="", namespaces=NS) or "")[:10]
+                reddit = ""
+                link_el = entry.find("a:link", NS)
+                if link_el is not None:
+                    reddit = link_el.attrib.get("href", "")
+                key = (title, reddit)
+                if key in seen:
+                    continue
+                seen.add(key)
+                content = entry.findtext("a:content", default="", namespaces=NS) or ""
+                links = extract_links(content, reddit)[:8]
+                hits.append(Hit(score_hit(title, query, links), sub, query, title, date, reddit, links))
+            time.sleep(delay)
+    hits.sort(key=lambda h: h.score, reverse=True)
+    return hits
+
+
+def render_md(hits: List[Hit]) -> str:
+    lines = [
+        "# reddit sample-pack hits",
+        "",
+        "Generated by `tools/reddit_sample_search.py` through Reddit `search.rss` feeds.",
+        "Links are source references only; verify manually before downloading/rehosting.",
+        "",
+    ]
+    for h in hits:
+        lines.append(f"## {h.title}")
+        lines.append(f"- score: {h.score}")
+        lines.append(f"- source: r/{h.sub} search `{h.query}`")
+        if h.date:
+            lines.append(f"- date: {h.date}")
+        lines.append(f"- reddit: {h.reddit}")
+        for link in h.links:
+            lines.append(f"- link: {link}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Search Reddit RSS feeds for sample-pack links")
+    ap.add_argument("queries", nargs="*", help="queries; default uses a curated sample-source query set")
+    ap.add_argument("--subs", default=",".join(DEFAULT_SUBS), help="comma-separated subreddit list")
+    ap.add_argument("--delay", type=float, default=1.5, help="delay between RSS requests")
+    ap.add_argument("--max-entries", type=int, default=12, help="max entries per feed")
+    ap.add_argument("--limit", type=int, default=120, help="output hit limit")
+    ap.add_argument("--out", help="write markdown to file instead of stdout")
+    args = ap.parse_args()
+
+    subs = [s.strip() for s in args.subs.split(",") if s.strip()]
+    queries = args.queries or DEFAULT_QUERIES
+    hits = search(subs, queries, args.delay, args.max_entries)[: args.limit]
+    md = render_md(hits)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(md + "\n")
+        print(f"wrote {args.out} ({len(hits)} hits)")
+    else:
+        print(md)
+
+
+if __name__ == "__main__":
+    main()
