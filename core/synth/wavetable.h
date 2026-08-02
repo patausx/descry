@@ -3,8 +3,13 @@
 //
 // files: sdmc:/3ds/descry/wavetable/*.wav - each file is treated as ONE CYCLE
 // (the whole file is resampled to 1024 points). standard single-cycle packs
-// (AKWF etc, ~600 samples) work as-is. loaded once at boot; slot order is
-// ALPHABETICAL so project references stay stable while the folder is unchanged.
+// (AKWF etc, ~600 samples) work as-is. loaded once at boot.
+//
+// slot order is case-insensitive ALPHABETICAL over the whole directory, so the
+// same folder always yields the same slots regardless of FAT readdir order.
+// with more than FILE_SLOTS files only the alphabetically first ones load, and
+// adding a file that sorts EARLY still shifts the later slots - user_slot refs
+// in saved projects are stable only while the folder itself is unchanged.
 #pragma once
 #include "../audio/fixed.h"
 #include <cstdint>
@@ -22,8 +27,10 @@ public:
 
     static WavetableBank& instance();
 
-    // scan a directory for .wav files (alphabetical, up to SLOTS), resample
-    // each whole file into a 1024-point cycle. returns number loaded.
+    // scan a directory for .wav files (case-insensitive alphabetical, up to
+    // FILE_SLOTS), resample each whole file into a 1024-point cycle. filenames
+    // up to 63 chars are accepted; only the displayed name is truncated.
+    // returns the total number of occupied slots (files + restored captures).
     int scan_dir(const char* dir);
 
     int count() const { return active_count_; }

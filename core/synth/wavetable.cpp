@@ -191,40 +191,55 @@ int WavetableBank::scan_dir(const char* dir) {
         std::memset(data_[i], 0, sizeof(data_[i]));
     }
 
-    char found[FILE_SLOTS * 2][20];
+    // The scan buffer is deliberately WIDER than names_[]: a filename is only
+    // truncated for DISPLAY, never used as a reason to skip the file. The old
+    // 20-byte buffer silently dropped every AKWF_hvoice_0001.wav-style name,
+    // i.e. most real single-cycle packs, with no message to the user.
+    constexpr int MAX_NAME = 64;
+    constexpr int CANDIDATES = FILE_SLOTS * 2;   // spare room for unloadable files
+    char found[CANDIDATES][MAX_NAME];
     int nfound = 0;
+
+    // Keep a running alphabetical top-N over the WHOLE directory. The previous
+    // code sorted only the first 32 readdir entries, so with >16 files present
+    // the surviving set depended on raw FAT directory order and adding or
+    // deleting any file could reshuffle slots - silently repointing user_slot
+    // references inside already-saved projects at different waveforms.
+    auto name_less = [](const char* a, const char* b) {
+        const int ci = strcasecmp(a, b);          // users read lists case-insensitively
+        return ci != 0 ? ci < 0 : std::strcmp(a, b) < 0;   // stable total order
+    };
+
     DIR* d = opendir(dir);
     if (d) {
-        while (nfound < FILE_SLOTS * 2) {
-            dirent* e = readdir(d);
-            if (!e) break;
+        while (dirent* e = readdir(d)) {
             const char* nm = e->d_name;
             const std::size_t len = std::strlen(nm);
-            if (len < 5 || len >= sizeof(found[0]) || strcasecmp(nm + len - 4, ".wav") != 0) continue;
-            std::strncpy(found[nfound], nm, sizeof(found[0]) - 1);
-            found[nfound][sizeof(found[0]) - 1] = 0;
-            ++nfound;
+            if (len < 5 || len >= MAX_NAME) continue;
+            if (strcasecmp(nm + len - 4, ".wav") != 0) continue;
+            // drop it if the list is full and this name sorts after the last one
+            if (nfound == CANDIDATES && !name_less(nm, found[CANDIDATES - 1])) continue;
+            int pos = nfound < CANDIDATES ? nfound : CANDIDATES - 1;
+            while (pos > 0 && name_less(nm, found[pos - 1])) {
+                std::memcpy(found[pos], found[pos - 1], MAX_NAME);
+                --pos;
+            }
+            std::snprintf(found[pos], MAX_NAME, "%s", nm);
+            if (nfound < CANDIDATES) ++nfound;
         }
         closedir(d);
-    }
-    for (int i = 1; i < nfound; ++i) {
-        char key[20]; std::memcpy(key, found[i], sizeof(key));
-        int j = i - 1;
-        while (j >= 0 && std::strcmp(found[j], key) > 0) {
-            std::memcpy(found[j + 1], found[j], sizeof(key)); --j;
-        }
-        std::memcpy(found[j + 1], key, sizeof(key));
     }
 
     int file_count = 0;
     for (int i = 0; i < nfound && file_count < FILE_SLOTS; ++i) {
-        char path[256];
+        char path[MAX_NAME + 256];
         const int written = std::snprintf(path, sizeof(path), "%s/%s", dir, found[i]);
         if (written <= 0 || written >= (int)sizeof(path)) continue;
         Sample tmp;
         auto r = load_wav_to_sample(path, tmp, 32000, 32000);
         if ((int)r < 0 || tmp.num_frames() < 2) continue;
         if (!cycle_resample_window(tmp, 0, tmp.num_frames(), data_[file_count], SIZE)) continue;
+        // strip ".wav", then truncate to the display width only here
         std::size_t len = std::strlen(found[i]) - 4;
         if (len >= sizeof(names_[0])) len = sizeof(names_[0]) - 1;
         std::memcpy(names_[file_count], found[i], len); names_[file_count][len] = 0;
