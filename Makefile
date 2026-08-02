@@ -64,7 +64,7 @@ export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export _3DSXFLAGS += --smdh=$(CURDIR)/$(TARGET).smdh
 
-.PHONY: $(BUILD) clean all run send cia cci
+.PHONY: $(BUILD) clean all run send cia cci tests
 
 all: $(BUILD)
 
@@ -102,6 +102,36 @@ cia: $(BUILD) $(BUILD)/$(TARGET).bnr $(BUILD)/$(TARGET)_cia.smdh
 cci: $(BUILD) $(BUILD)/$(TARGET).bnr $(BUILD)/$(TARGET)_cia.smdh
 	$(MAKEROM) -f cci -o $(TARGET).3ds -elf $(TARGET).elf -rsf $(TARGET).rsf \
 	  -icon $(BUILD)/$(TARGET)_cia.smdh -banner $(BUILD)/$(TARGET).bnr -target t -exefslogo
+
+# --- host tests -------------------------------------------------------------
+# Built with the SYSTEM g++, not devkitARM: these exercise pure fixed-point core
+# logic (no libctru), so they run on the dev machine in a couple of seconds.
+#   make tests
+HOST_CXX  ?= g++
+TEST_SRCS := $(wildcard tools/test_*.cpp)
+TEST_CORE := core/synth/wavetable.cpp core/synth/sampler.cpp core/synth/wav_loader.cpp \
+             core/synth/wavsynth.cpp core/synth/fm.cpp core/synth/dsn_synth.cpp \
+             core/synth/mic_recorder.cpp core/synth/sample_utils.cpp \
+             core/synth/drumkit.cpp core/synth/drum_gen.cpp core/audio/fixed.cpp
+TEST_OUT  := build/hosttests
+
+tests:
+	@mkdir -p $(TEST_OUT)
+	@fail=0; \
+	for t in $(TEST_SRCS); do \
+	  name=$$(basename $$t .cpp); \
+	  if ! $(HOST_CXX) -std=c++17 -O1 -I. -o $(TEST_OUT)/$$name $$t $(TEST_CORE) \
+	       > $(TEST_OUT)/$$name.log 2>&1; then \
+	    echo "BUILD FAIL  $$name"; tail -5 $(TEST_OUT)/$$name.log; fail=1; continue; \
+	  fi; \
+	  if $(TEST_OUT)/$$name > $(TEST_OUT)/$$name.out 2>&1; then \
+	    echo "pass  $$name"; \
+	  else \
+	    echo "FAIL  $$name"; tail -15 $(TEST_OUT)/$$name.out; fail=1; \
+	  fi; \
+	done; \
+	if [ $$fail -ne 0 ]; then echo "host tests FAILED"; exit 1; fi; \
+	echo "all host tests passed"
 
 #---------------------------------------------------------------------------------
 else

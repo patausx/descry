@@ -3,6 +3,7 @@
 // and check the detector drops markers near the real onsets.
 // build: g++ -std=c++17 -I. tools/test_slice.cpp core/synth/sample_utils.cpp -o /tmp/test_slice
 #include "../core/synth/sample_utils.h"
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -70,6 +71,49 @@ int main() {
             }
         }
         std::printf("  matched %d/%zu real onsets\n", hit, onsets.size());
+        assert(hit == (int)onsets.size() && "every synthetic onset must get a marker");
     }
+
+    // --- sensitivity must actually do something ---------------------------
+    // The break above has a SILENT floor between hits, so the onset ratio never
+    // decides anything and every sensitivity returns the same chops - the knob
+    // could break completely without this test noticing. On sustained material
+    // (bass bed + ghost notes) the trailing average stays high and the ratio is
+    // what separates a real hit from the bed.
+    {
+        synth::Sample bed;
+        bed.channels = 1;
+        bed.data.assign(64000, 0);
+        for (int i = 0; i < 64000; ++i)
+            bed.data[i] = (int16_t)(9000 * std::sin(i * 0.02) + (rand() % 400 - 200));
+        auto add_hit = [&](int at, double amp, double dec) {
+            for (int i = 0; i < 4000 && at + i < 64000; ++i) {
+                double e = std::exp(-i / dec);
+                int32_t v = bed.data[at + i] + (int32_t)(amp * 30000 * e * std::sin(i * 0.35));
+                bed.data[at + i] = (int16_t)std::max(-32768, std::min(32767, v));
+            }
+        };
+        add_hit(0, 1.0, 900);      add_hit(8000, 0.90, 700);
+        add_hit(11500, 0.35, 400); add_hit(16000, 1.0, 900);
+        add_hit(24000, 0.85, 700); add_hit(27800, 0.30, 350);
+        add_hit(32000, 1.0, 900);  add_hit(40000, 0.90, 700);
+        add_hit(44000, 0.25, 300); add_hit(48000, 0.95, 800);
+        add_hit(56000, 0.85, 700);
+
+        int prev = -1, lowest = -1, highest = -1;
+        for (int sv = 0; sv <= 255; sv += 51) {
+            synth::Sample c = bed;
+            int n = synth::sample_auto_slice_transients(c, sv);
+            std::printf("sustained: sens %3d -> %2d chops\n", sv, n);
+            assert(n >= 1 && n <= synth::Sample::MAX_CHOPS);
+            assert(n >= prev && "raising sensitivity must never yield fewer chops");
+            if (lowest < 0) lowest = n;
+            highest = n;
+            prev = n;
+        }
+        assert(highest > lowest && "sensitivity must change the chop count");
+    }
+
+    std::puts("slice detector: ok");
     return 0;
 }
