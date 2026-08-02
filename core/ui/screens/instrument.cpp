@@ -2727,8 +2727,11 @@ void App::draw_env_overlay(Draw& d) {
                 shown = true; env_anim_latch();
                 const auto& op = inst.fm.ops[inst_row_ - 6];
                 live(inst_row_ - 6, st, lv);
-                char t[10];
-                std::snprintf(t, sizeof(t), "OP%d ENV", inst_row_ - 5);
+                // inst_row_ is 6..9 here, so the label is always "OP1".."OP4";
+                // the compiler can't narrow that, so give snprintf real room
+                // instead of letting -Wformat-truncation shout on every build.
+                char t[16];
+                std::snprintf(t, sizeof(t), "OP%d ENV", (inst_row_ - 5) & 0xF);
                 draw_env_popup(d, op.attack, op.decay,
                                (fx::q15)((int)op.sustain * fx::Q15_ONE / 127),
                                op.release, inst_col_ - 3, t, st, lv);
