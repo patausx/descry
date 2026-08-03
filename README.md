@@ -141,6 +141,23 @@ platform/3ds/  # libctru, ndsp audio, citro2d, mic
 tools/         # host-side demo generators and render/analysis helpers
 ```
 
+## thanks
+
+descry is written by one person on real hardware, which means the bugs that
+survive are the ones I can't reproduce. bug reports are worth a lot here —
+if you hit something, please [open an issue](https://github.com/patausx/descry/issues).
+
+- **[@Rhlp-Engineering](https://github.com/Rhlp-Engineering)** — reported that
+  the touch keyboard always wrote notes with REC off, and that there was no way
+  to clear a note ([#5](https://github.com/patausx/descry/issues/5)). led to the
+  JAM / WRT / LIVE record modes and the CLR button in v1.0.4
+- **[@francorv99](https://github.com/francorv99)** — reported that song exports
+  couldn't be named and overwrote each other
+  ([#6](https://github.com/patausx/descry/issues/6)). led to project-named
+  exports in `renders/` in v1.0.5
+- an external code audit of v1.0.4 surfaced two use-after-free races between the
+  UI and the audio thread, fixed in v1.0.5
+
 ## see also
 
 - [LSDj](https://www.littlesounddj.com) · [Dirtywave M8](https://dirtywave.com) —
