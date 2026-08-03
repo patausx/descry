@@ -112,7 +112,8 @@ TEST_SRCS := $(wildcard tools/test_*.cpp)
 TEST_CORE := core/synth/wavetable.cpp core/synth/sampler.cpp core/synth/wav_loader.cpp \
              core/synth/wavsynth.cpp core/synth/fm.cpp core/synth/dsn_synth.cpp \
              core/synth/mic_recorder.cpp core/synth/sample_utils.cpp \
-             core/synth/drumkit.cpp core/synth/drum_gen.cpp core/audio/fixed.cpp
+             core/synth/drumkit.cpp core/synth/drum_gen.cpp core/audio/fixed.cpp \
+             core/sequencer/project.cpp
 TEST_OUT  := build/hosttests
 
 tests:

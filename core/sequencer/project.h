@@ -21,6 +21,19 @@ enum class InstrumentType : uint8_t {
 
 constexpr int INSTRUMENT_TYPE_COUNT = 6;   // for UI clamps
 
+// project name -> FAT-safe file basename (no extension).
+// keeps [A-Za-z0-9-_.], spaces become '_', runs of '_' collapse, trailing
+// separators trimmed, empty result becomes "untitled". lives here (not in the
+// 3ds layer) so the UI can show the user the exact name it will render to.
+void sanitize_basename(const char* in, char* out, std::size_t n);
+
+// pick a filename in `dir` that does not exist yet: "<base><ext>", then
+// "<base>_01<ext>" .. "<base>_99<ext>". writes the BASENAME (not the full path)
+// into out. after 100 takes it recycles _99 rather than refusing to export.
+// `dir` must already exist; a missing dir just means the first name is free.
+void next_free_filename(const char* dir, const char* base, const char* ext,
+                        char* out, std::size_t n);
+
 struct Instrument {
     InstrumentType type = InstrumentType::None;
     char name[16] = {0};

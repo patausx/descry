@@ -1,6 +1,39 @@
 #include "project.h"
+#include <cstdio>
+#include <sys/stat.h>
 
 namespace trackr::seq {
+
+void sanitize_basename(const char* in, char* out, std::size_t n) {
+    if (!out || n == 0) return;
+    std::size_t w = 0;
+    for (std::size_t i = 0; in && in[i] && w + 1 < n; ++i) {
+        char c = in[i];
+        if (c == ' ') c = '_';
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+        if (!ok) continue;
+        if (c == '_' && w > 0 && out[w - 1] == '_') continue;
+        out[w++] = c;
+    }
+    while (w > 0 && (out[w - 1] == '_' || out[w - 1] == '.' || out[w - 1] == '-')) --w;
+    out[w] = 0;
+    if (w == 0) std::snprintf(out, n, "untitled");
+}
+
+void next_free_filename(const char* dir, const char* base, const char* ext,
+                        char* out, std::size_t n) {
+    if (!out || n == 0) return;
+    char path[256];
+    struct stat st;
+    for (int i = 0; i <= 99; ++i) {
+        if (i == 0) std::snprintf(out, n, "%s%s", base, ext);
+        else        std::snprintf(out, n, "%s_%02d%s", base, i, ext);
+        std::snprintf(path, sizeof(path), "%s/%s", dir, out);
+        if (stat(path, &st) != 0) return;   // free
+    }
+    std::snprintf(out, n, "%s_99%s", base, ext);
+}
 
 audio::Voice* Project::make_voice(uint8_t instrument_id) {
     if (instrument_id >= MAX_INSTRUMENTS) return nullptr;
