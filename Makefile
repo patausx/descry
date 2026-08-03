@@ -2,12 +2,21 @@
 .SUFFIXES:
 #---------------------------------------------------------------------------------
 
+# host-only targets (`make tests`) build with the system g++ and must work on a
+# machine without the 3DS toolchain - don't demand DEVKITARM for them.
+HOST_ONLY_GOALS := tests
+ifeq ($(filter-out $(HOST_ONLY_GOALS),$(or $(MAKECMDGOALS),all)),)
+  HOST_ONLY := 1
+endif
+
+ifndef HOST_ONLY
 ifeq ($(strip $(DEVKITARM)),)
 $(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
 endif
 
 TOPDIR ?= $(CURDIR)
 include $(DEVKITARM)/3ds_rules
+endif
 
 #---------------------------------------------------------------------------------
 TARGET      := descry
@@ -113,6 +122,7 @@ TEST_CORE := core/synth/wavetable.cpp core/synth/sampler.cpp core/synth/wav_load
              core/synth/wavsynth.cpp core/synth/fm.cpp core/synth/dsn_synth.cpp \
              core/synth/mic_recorder.cpp core/synth/sample_utils.cpp \
              core/synth/drumkit.cpp core/synth/drum_gen.cpp core/audio/fixed.cpp \
+             core/audio/mixer.cpp core/sequencer/player.cpp \
              core/sequencer/project.cpp
 TEST_OUT  := build/hosttests
 
