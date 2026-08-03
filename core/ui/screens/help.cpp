@@ -3,8 +3,11 @@
 // while open, closed with B / tapping the header / CLOSE button.
 //
 // content mirrors docs/GUIDE.md in compressed form: basics, keys, phrase
-// editing, instruments, the full FX command list, performance and sampling.
+// editing, instruments, the full FX command list, performance, sampling and
+// files/export.
 // 6x8 font -> 53 chars per line max; keep lines <= 50 to breathe.
+// AND keep each page <= 18 lines: line 19 lands under the footer divider and is
+// simply never seen (that silently swallowed the whole SD/export section once).
 #include "../app.h"
 #include "../ui_internal.h"
 #include "../../sequencer/fx.h"
@@ -139,9 +142,13 @@ static const char* const pg_perform[] = {
     nullptr
 };
 
-// --- page 8: sampling + SD ---
+// --- page 8: sampling ---
+// NOTE: a help page fits ~18 lines before it collides with the footer divider.
+// this used to be one "sampling + files" page of 23 lines, so the entire SD
+// layout block (including how to export) was drawn under the footer = invisible.
+// keep each page at or below 18 lines.
 static const char* const pg_files[] = {
-    "SAMPLING + FILES",
+    "SAMPLING",
     "",
     "mic: REC panel in a sampler instrument -",
     "record straight into a sample slot.",
@@ -154,16 +161,29 @@ static const char* const pg_files[] = {
     ">KIT >PHR SHUF=dice. drag marker=moves it.",
     "SYNC row: fit sample to N bars (repitch).",
     "LOAD tab: wav browser (8/16/24/32 bit).",
+    nullptr
+};
+
+// --- page 9: files / SD / export ---
+static const char* const pg_sd[] = {
+    "FILES + EXPORT",
     "",
     "SD layout - sdmc:/3ds/descry/",
     "  projects/    16 project slots",
     "  wav/         your samples (subfolders ok)",
     "  wavetable/   single-cycle waves (USER osc)",
     "  screens/     screenshots (R+SELECT)",
-    "  render.wav   song export (PRJ view: SELECT)",
+    "  renders/     song exports",
     "",
-    "projects autosave on exit; the PRJ view",
-    "shows a NOW banner + dirty marker.",
+    "EXPORT: SELECT in the PRJ view renders the",
+    "song to renders/<project name>.wav",
+    "(60s max, 32kHz stereo). the PRJ view shows",
+    "the exact target filename before you press.",
+    "",
+    "rename the project first: hold R in the PRJ",
+    "view, A/B cycle char, L/R move, X=clear.",
+    "a second render never overwrites - it becomes",
+    "NAME_01.wav, NAME_02.wav and so on.",
     nullptr
 };
 
@@ -176,6 +196,7 @@ static const HelpPage kPages[] = {
     { "6. FX LIST B",    nullptr    },   // generated from fx.h
     { "7. PERFORM",      pg_perform },
     { "8. SAMPLING",     pg_files   },
+    { "9. FILES+EXPORT", pg_sd      },
 };
 constexpr int N_PAGES = (int)(sizeof(kPages) / sizeof(kPages[0]));
 
@@ -193,7 +214,7 @@ void App::open_help() {
         case Screen::Phrase:     help_page_ = 2; break;
         case Screen::Instrument: help_page_ = 3; break;
         case Screen::Mixer:      help_page_ = 6; break;
-        case Screen::Project:    help_page_ = 7; break;
+        case Screen::Project:    help_page_ = 8; break;   // files + export page
         default:                 help_page_ = 0; break;
     }
     help_on_ = true;

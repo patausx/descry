@@ -188,6 +188,14 @@ globally and save with the project.
 | X | new project |
 | B | delete (press twice to confirm) |
 | hold R | **rename mode**: A/B cycle the character, left/right move, X clear |
+| SELECT | **render the song to WAV** |
+
+the render lands in `renders/` named after the current project, and the view
+shows the exact target filename (`SEL -> renders/NAME.wav`) *before* you press
+SELECT — so rename first (hold R), then render. an existing take is never
+overwritten: repeat renders become `NAME_01.wav`, `NAME_02.wav`, … which means
+you can bounce several projects in one sitting and pull them all off the SD card
+later. characters the FAT filesystem dislikes are stripped, spaces become `_`.
 
 autosave writes `session.tr3d` on exit.
 
@@ -504,7 +512,7 @@ everything lives under `sdmc:/3ds/descry/`:
 | `wav/` | your WAVs for the sampler LOAD browser (subfolders work) |
 | `wavetable/` | single-cycle WAVs for the wavsynth USER shape |
 | `screens/` | screenshots (R+SELECT) |
-| `render.wav` | song export — press **SELECT** in the project view (up to 60 s, 32 kHz stereo) |
+| `renders/` | song exports — press **SELECT** in the project view (up to 60 s, 32 kHz stereo). the file is named after the project (hold **R** in the project view to rename), and a `_01`, `_02`… suffix is added instead of overwriting an earlier take |
 
 ---
 

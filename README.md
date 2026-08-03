@@ -126,7 +126,7 @@ everything lives under `sdmc:/3ds/descry/`:
 - `wav/` — put your own WAVs here (subfolders work)
 - `wavetable/` — single-cycle WAVs for the wavsynth USER shape
 - `screens/` — screenshots
-- `render.wav` — song export
+- `renders/` — song exports, named after the project
 
 ## architecture
 
