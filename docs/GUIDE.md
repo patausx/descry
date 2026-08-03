@@ -159,7 +159,7 @@ mod tables: 3 FX lanes × 16 rows, looped while a note is alive.
 | left/right | move across strips |
 | up/down | track strip: fader / duck depth. master strip: MST, DTIM, DFB, DWET, RWET, RSIZ, RDMP, DUCK, DREL |
 | A / B / X / Y | value ±1 / ±16 |
-| SELECT | mute toggle on a track strip |
+| SELECT | mute toggle on a track strip (saved with the project) |
 
 the bottom screen shows 9 **touch faders** (8 tracks + MST): drag = volume,
 tap the header = mute. `DUCK` selects the sidechain source track (the track
@@ -197,6 +197,12 @@ overwritten: repeat renders become `NAME_01.wav`, `NAME_02.wav`, … which means
 you can bounce several projects in one sitting and pull them all off the SD card
 later. characters the FAT filesystem dislikes are stripped, spaces become `_`.
 
+the export is the **same mix you hear**: channel faders, master volume, mutes,
+delay/reverb settings and the sidechain duck all go into the file. it runs until
+the song has played through once, then keeps rendering ~3 s so delay and reverb
+tails ring out instead of being cut off. rests inside the song are fine — only a
+project that never makes a sound at all is reported as a failed render.
+
 autosave writes `session.tr3d` on exit.
 
 ### everywhere
@@ -204,6 +210,7 @@ autosave writes `session.tr3d` on exit.
 | key | action |
 | --- | --- |
 | START | play / stop · SELECT+START = exit |
+| START (song view) | plays from the **cursor row** — L+START starts from the top |
 | L+d-pad | BPM (up/down ±1, left/right ±10) |
 | R+up/down | groove (ticks per step) · R+left/right swing |
 | L+SELECT | fullscreen oscilloscope |
@@ -512,7 +519,7 @@ everything lives under `sdmc:/3ds/descry/`:
 | `wav/` | your WAVs for the sampler LOAD browser (subfolders work) |
 | `wavetable/` | single-cycle WAVs for the wavsynth USER shape |
 | `screens/` | screenshots (R+SELECT) |
-| `renders/` | song exports — press **SELECT** in the project view (up to 60 s, 32 kHz stereo). the file is named after the project (hold **R** in the project view to rename), and a `_01`, `_02`… suffix is added instead of overwriting an earlier take |
+| `renders/` | song exports — press **SELECT** in the project view (32 kHz stereo, streamed straight to the card, 10 min cap). the render carries your full mix (faders, mutes, sends, master) and a ~3 s tail for the delay/reverb. the file is named after the project (hold **R** in the project view to rename), and a `_01`, `_02`… suffix is added instead of overwriting an earlier take |
 
 ---
 

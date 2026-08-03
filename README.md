@@ -88,6 +88,7 @@ old 3DS is not supported.
 | R + SELECT | screenshot → SD |
 | ZR (hold) | mic record |
 | START | play / stop · SELECT + START — exit |
+| START (song view) | plays from the cursor row · L + START — from the top |
 | touch | keyboard / pads / XY pad / faders / tabs |
 
 ## install

@@ -227,7 +227,10 @@ void App::update(const InputState& in) {
     }
 
     // play/stop via start (contextual: Phrase = single phrase, Chain = loop the
-    // chain on track 0 (m8 chain preview), otherwise - song)
+    // chain on track 0 (m8 chain preview), otherwise - song).
+    // in the SONG view playback starts at the CURSOR row (m8/lsdj behaviour):
+    // working on row 40 of an arrangement used to mean re-listening from row 0
+    // on every press. L+START (or any other view) still starts from the top.
     if (in.start) {
         if (player_.playing()) {
             player_.stop();
@@ -236,6 +239,8 @@ void App::update(const InputState& in) {
             player_.play_phrase(0, cur_phrase_);
         } else if (screen_ == Screen::Chain) {
             player_.play_chain(0, cur_chain_);
+        } else if (screen_ == Screen::Song && !in.held_l) {
+            player_.play_song((uint16_t)song_row_);
         } else {
             player_.play_song(0);
         }
