@@ -533,7 +533,10 @@ everything lives under `sdmc:/3ds/descry/`:
   in the song view, phrase clone in the chain view).
 - **R+Y** clears a whole phrase; **R+B** clears a step; **R+A** clears just
   the cell under the cursor.
-- **ZL+B / ZL+A** = undo / redo, everywhere in the sequencer.
+- **ZL+B / ZL+A** = undo / redo, everywhere in the sequencer. in the instrument
+  view they walk the *instrument* history instead, so a preset load or a type
+  switch — which replaces every parameter and the name at once — is one press away
+  from coming back.
 - lost in FX letters? **SELECT on an FX column** opens the built-in command
   list with full names.
 - hold **ZL, L or R** and look at the bottom-screen hint bar — it shows that

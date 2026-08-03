@@ -74,6 +74,16 @@ public:
     bool consume_load_request() { bool v = load_request_; load_request_ = false; return v; }
     bool consume_render_request() { bool v = render_request_; render_request_ = false; return v; }
     bool consume_reset_request() { bool v = reset_request_; reset_request_ = false; return v; }
+
+    // drop the undo/redo history. MUST be called by the platform layer whenever
+    // the project is replaced wholesale (slot load, new project, reset): the
+    // records address phrases/instruments by index, so replaying them against a
+    // DIFFERENT project would splice the old song's data into the new one.
+    void reset_history() {
+        undo_.clear();
+        inst_undo_.clear();
+        step_snap_taken_ = false;
+    }
     // touch-keyboard write mode (issue #5: "REC off still records"):
     // Jam   = preview only, never writes
     // Write = tracker write mode - notes land at the cursor (phrase view)
@@ -197,12 +207,18 @@ private:
 
     // === undo/redo ===
     seq::UndoStack undo_;
+    // whole-instrument history (preset loads / type switches / param edits).
+    // separate ring - see undo.h for why it isn't merged into UndoStack.
+    seq::InstUndoStack inst_undo_;
     // capture the phrase step under (cur_phrase_, row) before an edit; record after.
     // usage: snapshot_step(row) -> mutate -> commit_step(row).
     seq::EditRecord::Payload step_before_;
     bool step_snap_taken_ = false;
     void snapshot_step(int row);
     void commit_step(int row);
+    // same discipline for the current instrument (Instrument view edits)
+    void snapshot_inst();
+    void commit_inst();
     void do_undo();
     void do_redo();
 

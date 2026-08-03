@@ -41,7 +41,8 @@ old 3DS is not supported.
 - key/scale snap for the touch keyboard (11 scales)
 - per-phrase length for polymetry
 - live mode: quantized chain launch per track, solo pads
-- clone (deep copy) for chains and phrases, undo/redo, block selection copy/paste
+- clone (deep copy) for chains and phrases, undo/redo (including whole-instrument
+  history for preset loads), block selection copy/paste
 
 **instruments** (all fixed-point, 32 kHz)
 - wavsynth — classic waves with unison/detune, plus user wavetables

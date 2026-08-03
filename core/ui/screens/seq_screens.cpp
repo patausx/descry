@@ -341,7 +341,31 @@ void App::commit_step(int row) {
     undo_.record(seq::EditKind::Step, cur_phrase_, (uint16_t)row, step_before_, after, frame_, 30);
 }
 
+// snapshot/commit for the CURRENT instrument. same before/after discipline as
+// steps, but the payload is the whole Instrument - the only way to make preset
+// loads and type switches reversible.
+void App::snapshot_inst() {
+    inst_undo_.snapshot(project_, cur_inst_);
+}
+
+void App::commit_inst() {
+    inst_undo_.commit(project_, cur_inst_, frame_, 30);
+}
+
 void App::do_undo() {
+    // in the instrument view ZL+B walks the INSTRUMENT history - the user is
+    // looking at instrument params, so that is what they expect to come back.
+    if (screen_ == Screen::Instrument) {
+        uint16_t id;
+        if (inst_undo_.undo(project_, id)) {
+            cur_inst_ = (uint8_t)id;
+            dirty = true;
+            edit_flash_frame_ = frame_;
+            push_live_inst_params(cur_inst_);
+            return;
+        }
+        // nothing in the instrument history - fall through to the cell history
+    }
     seq::EditKind k; uint16_t a, b;
     if (!undo_.undo(project_, k, a, b)) return;
     dirty = true;
@@ -355,6 +379,16 @@ void App::do_undo() {
 }
 
 void App::do_redo() {
+    if (screen_ == Screen::Instrument) {
+        uint16_t id;
+        if (inst_undo_.redo(project_, id)) {
+            cur_inst_ = (uint8_t)id;
+            dirty = true;
+            edit_flash_frame_ = frame_;
+            push_live_inst_params(cur_inst_);
+            return;
+        }
+    }
     seq::EditKind k; uint16_t a, b;
     if (!undo_.redo(project_, k, a, b)) return;
     dirty = true;

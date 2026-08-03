@@ -53,7 +53,7 @@ static const char* const pg_keys[] = {
     "L+dpad     BPM  (up/dn +-1, l/r +-10)",
     "R+up/dn    groove (ticks per step)",
     "R+l/r      swing 0..50%",
-    "ZL+B / A   undo / redo",
+    "ZL+B / A   undo / redo (inst view: instrument)",
     "ZL+X / Y   copy / paste",
     "ZL+SELECT  selection mode / clone / fx row",
     "L+SELECT   fullscreen oscilloscope",

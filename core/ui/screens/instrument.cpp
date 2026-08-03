@@ -1386,6 +1386,7 @@ bool App::update_fx_section(const InputState& in, seq::Instrument& inst) {
     if (in.y) delta = -16;
 
     if (delta) {
+        snapshot_inst();   // FX defaults are part of the Instrument - same history
         switch (inst_fx_col_) {
             case 0: {   // FILT type 0..4
                 int v = (int)inst.fx_filter_type + (delta > 0 ? 1 : -1);
@@ -1437,6 +1438,7 @@ bool App::update_fx_section(const InputState& in, seq::Instrument& inst) {
             }
         }
         mark_dirty();
+        commit_inst();
     }
     return true;   // FX focused: consume the frame, suppress normal nav/edit
 }
@@ -1553,6 +1555,10 @@ post_nav:
     }
 
     if (delta) {
+        // whole-instrument snapshot around the edit: this one hook covers every
+        // branch below, including preset loads and type switches (which replace
+        // all params + the name and were previously irreversible).
+        snapshot_inst();
         if (is_drum && inst_row_ >= 3 && inst_row_ < 19) {
             // edit sample slot for the pad
             int pad = inst_row_ - 3;
@@ -1779,6 +1785,7 @@ post_nav:
         }
         // any param edit -> refresh voices that are already sounding (live tweak)
         push_live_inst_params(cur_inst_);
+        commit_inst();
     }
 
     // instrument preview

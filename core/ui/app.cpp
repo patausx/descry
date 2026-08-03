@@ -134,8 +134,12 @@ void App::update(const InputState& in) {
     if (in.held_l && in.a && screen_ == Screen::Instrument) {
         for (int i = 0; i < seq::MAX_INSTRUMENTS; ++i) {
             if (project_.instruments[i].type == seq::InstrumentType::None) {
-                project_.instruments[i] = project_.instruments[cur_inst_];
+                // record against the DESTINATION slot so ZL+B puts it back to empty
+                uint8_t prev_inst = cur_inst_;
                 cur_inst_ = (uint8_t)i;
+                snapshot_inst();
+                project_.instruments[i] = project_.instruments[prev_inst];
+                commit_inst();
                 edit_flash_frame_ = frame_;
                 mark_dirty();
                 break;

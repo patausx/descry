@@ -106,4 +106,72 @@ bool UndoStack::redo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& 
     return true;
 }
 
+// === instrument-level undo ===
+// whole-Instrument snapshots. covers what cell-level undo could never reach:
+// preset loads and type switches, which overwrite EVERY param plus the name in
+// one keypress and used to be unrecoverable.
+
+void InstUndoStack::snapshot(const Project& p, uint16_t id) {
+    if (id >= MAX_INSTRUMENTS) { snap_taken_ = false; return; }
+    snap_ = p.instruments[id];
+    snap_id_ = id;
+    snap_taken_ = true;
+}
+
+void InstUndoStack::commit(const Project& p, uint16_t id, uint32_t frame,
+                           uint32_t coalesce_frames) {
+    if (!snap_taken_ || id != snap_id_ || id >= MAX_INSTRUMENTS) { snap_taken_ = false; return; }
+    snap_taken_ = false;
+    const Instrument& now = p.instruments[id];
+    // no net change -> nothing to remember (value clamped at its limit, etc.)
+    if (std::memcmp(&snap_, &now, sizeof(Instrument)) == 0) return;
+
+    // coalesce: same instrument, recent -> extend the existing record's `after`,
+    // so holding A through 12 presets is ONE undo, not twelve.
+    if (count_ > 0 && redo_ == 0) {
+        InstRecord& last = ring_[prev(head_)];
+        if (last.id == id && frame - last.frame <= coalesce_frames) {
+            last.after = now;
+            last.frame = frame;
+            if (std::memcmp(&last.before, &last.after, sizeof(Instrument)) == 0) {
+                head_ = prev(head_);
+                --count_;
+            }
+            return;
+        }
+    }
+
+    InstRecord& rec = ring_[head_];
+    rec.id = id;
+    rec.before = snap_;
+    rec.after = now;
+    rec.frame = frame;
+    head_ = next(head_);
+    if (count_ < CAP) ++count_;
+    redo_ = 0;
+}
+
+bool InstUndoStack::undo(Project& p, uint16_t& out_id) {
+    if (count_ == 0) return false;
+    int idx = prev(head_);
+    const InstRecord& rec = ring_[idx];
+    if (rec.id < MAX_INSTRUMENTS) p.instruments[rec.id] = rec.before;
+    out_id = rec.id;
+    head_ = idx;
+    --count_;
+    ++redo_;
+    return true;
+}
+
+bool InstUndoStack::redo(Project& p, uint16_t& out_id) {
+    if (redo_ == 0) return false;
+    const InstRecord& rec = ring_[head_];
+    if (rec.id < MAX_INSTRUMENTS) p.instruments[rec.id] = rec.after;
+    out_id = rec.id;
+    head_ = next(head_);
+    ++count_;
+    --redo_;
+    return true;
+}
+
 } // namespace trackr::seq

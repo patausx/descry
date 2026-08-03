@@ -122,8 +122,10 @@ TEST_CORE := core/synth/wavetable.cpp core/synth/sampler.cpp core/synth/wav_load
              core/synth/wavsynth.cpp core/synth/fm.cpp core/synth/dsn_synth.cpp \
              core/synth/mic_recorder.cpp core/synth/sample_utils.cpp \
              core/synth/drumkit.cpp core/synth/drum_gen.cpp core/audio/fixed.cpp \
+             core/synth/fm_presets.cpp core/synth/wave_presets.cpp \
+             core/synth/dsn_presets.cpp \
              core/audio/mixer.cpp core/sequencer/player.cpp \
-             core/sequencer/project.cpp
+             core/sequencer/undo.cpp core/sequencer/project.cpp
 TEST_OUT  := build/hosttests
 
 tests:

@@ -12,12 +12,11 @@
 // coordinates for Chain/Song/etc so those can be wired later without changing the buffer.
 #pragma once
 #include "types.h"
+#include "project.h"
 #include <cstdint>
 #include <cstring>
 
 namespace trackr::seq {
-
-class Project;  // fwd
 
 // What kind of object a record touches. Coordinates in (a,b) are interpreted per-kind.
 enum class EditKind : uint8_t {
@@ -28,12 +27,12 @@ enum class EditKind : uint8_t {
     // (InstByte / TableCell can be added later — buffer format already fits)
 };
 
-// One reversible edit. before/after hold the FULL touched cell (cheap: max 8 bytes).
+// One reversible edit. before/after hold the FULL touched cell (cheap: max 9 bytes).
 struct EditRecord {
     EditKind kind = EditKind::None;
     uint16_t a = 0;
     uint16_t b = 0;
-    // payload union — biggest member is PhraseStep (8 bytes). Stored by value.
+    // payload union — biggest member is PhraseStep (9 bytes). Stored by value.
     union Payload {
         PhraseStep step;
         ChainRow   chain;
@@ -41,6 +40,18 @@ struct EditRecord {
         Payload() : step{} {}
     } before, after;
     uint32_t frame = 0;   // app frame when recorded (for coalescing window)
+};
+
+// Whole-instrument snapshot. Instrument is a POD (union of param structs), so a
+// byte copy is a valid save/restore.
+// Kept in a SEPARATE, smaller ring: at 112 bytes a before/after pair is ~240
+// bytes, and paying that for every note nudge would cost 15 KB of static RAM.
+// Instrument edits are rare and coarse, so 12 of them is plenty.
+struct InstRecord {
+    uint16_t   id = 0;
+    Instrument before;
+    Instrument after;
+    uint32_t   frame = 0;
 };
 
 class UndoStack {
@@ -81,6 +92,45 @@ private:
     int head_ = 0;
     int count_ = 0;
     int redo_ = 0;
+
+    static int prev(int i) { return (i - 1 + CAP) % CAP; }
+    static int next(int i) { return (i + 1) % CAP; }
+};
+
+// Instrument-level undo, kept apart from UndoStack on purpose:
+// a record is ~240 bytes (two 112-byte Instrument copies), so it gets its own
+// small ring instead of inflating every note edit. Same coalescing idea: holding
+// A to scroll through presets collapses into ONE undo step.
+//
+// Snapshot discipline is the same as steps: snapshot() before the mutation,
+// commit() after. commit() with no net change pushes nothing.
+class InstUndoStack {
+public:
+    static constexpr int CAP = 12;   // 12 * ~240B = ~2.8 KB static
+
+    // capture the current state of instrument `id` as the pending `before`
+    void snapshot(const Project& p, uint16_t id);
+    // compare against the live instrument and push a record if anything changed
+    void commit(const Project& p, uint16_t id, uint32_t frame,
+                uint32_t coalesce_frames = 30);
+
+    // restore. out_id receives the instrument the UI should jump to.
+    bool undo(Project& p, uint16_t& out_id);
+    bool redo(Project& p, uint16_t& out_id);
+
+    bool can_undo() const { return count_ > 0; }
+    bool can_redo() const { return redo_ > 0; }
+    void clear() { head_ = 0; count_ = 0; redo_ = 0; snap_taken_ = false; }
+
+private:
+    InstRecord ring_[CAP];
+    int head_ = 0;
+    int count_ = 0;
+    int redo_ = 0;
+
+    Instrument snap_;                 // pending `before`
+    uint16_t   snap_id_ = 0;
+    bool       snap_taken_ = false;
 
     static int prev(int i) { return (i - 1 + CAP) % CAP; }
     static int next(int i) { return (i + 1) % CAP; }

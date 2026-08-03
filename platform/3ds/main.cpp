@@ -1142,6 +1142,7 @@ int main() {
             // chain/instrument data every tick on the worker thread
             if (player.playing()) player.stop();
             load_full_project();
+            app.reset_history();   // records index into the OLD project's banks
             app.dirty = false;
         }
         if (app.consume_reset_request()) {
@@ -1151,6 +1152,7 @@ int main() {
             // reconstruct default initialization via placement-new
             new (&g_project) seq::Project();
             setup_demo();
+            app.reset_history();
             app.dirty = false;   // fresh demo is clean, no autosave
         }
         if (app.consume_render_request()) {
@@ -1188,6 +1190,9 @@ int main() {
                         // either way the Song's mixer block changed - push it into
                         // the engine now, not on the next mixer-screen visit
                         app.sync_mixer_from_song();
+                        // the project was replaced: undo records point at banks
+                        // that no longer exist in this arrangement
+                        app.reset_history();
                         break;
                     case ui::App::ProjAction::Save:
                         slot_save(slot);
