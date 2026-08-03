@@ -38,7 +38,7 @@ using namespace trackr;
 // === sample save/load (raw mono int16) ===
 static const char* SAMPLE_DIR = "sdmc:/3ds/descry";
 static const char* SESSION_PATH = "sdmc:/3ds/descry/session.tr3d";
-static const char* RENDER_PATH = "sdmc:/3ds/descry/render.wav";
+static const char* RENDERS_DIR = "sdmc:/3ds/descry/renders";
 static const char* THEME_PATH = "sdmc:/3ds/descry/theme.cfg";      // legacy (v<=1.0.3)
 static const char* SETTINGS_PATH = "sdmc:/3ds/descry/settings.cfg";
 
@@ -125,8 +125,26 @@ extern "C" {
     u32 __stacksize__ = 512 * 1024;  // 512 KB
 }
 
+// === render filename (issue #6: "change title before rendering") ===
+// the export used to be a single hardcoded render.wav, so rendering a second
+// project silently destroyed the first one. now the file is named after the
+// PROJECT NAME (editable in the project view: hold R, A/B cycle chars) and a
+// numeric suffix is added instead of overwriting an existing take.
+// the name sanitizer lives in core (seq::sanitize_basename) so the UI can
+// display the exact target filename before the render starts.
+
+// full path for the next render. `rel` gets the short "NAME.wav" form
+// for the status line (slot_status is only 64 bytes).
+static void render_output_path(char* path, std::size_t np, char* rel, std::size_t nr) {
+    char base[32];
+    seq::sanitize_basename(g_project.name, base, sizeof(base));
+    seq::next_free_filename(RENDERS_DIR, base, ".wav", rel, nr);
+    std::snprintf(path, np, "%s/%s", RENDERS_DIR, rel);
+}
+
 // === render to wav (render the whole song) ===
-static bool render_song_to_wav() {
+// writes to renders/<project name>[_NN].wav; `rel_out` receives that short name.
+static bool render_song_to_wav(char* rel_out, std::size_t rel_n) {
     // Mixer + Player on the heap (~80kb total, dangerous on the stack)
     auto* xmix = new audio::Mixer();
     auto* xplayer = new seq::Player(g_project, *xmix);
@@ -161,7 +179,14 @@ static bool render_song_to_wav() {
     delete xmix;
 
     if (data.empty()) return false;
-    return write_wav(RENDER_PATH, data.data(), total_frames, SR);
+
+    mkdir("sdmc:/3ds", 0777);
+    mkdir(SAMPLE_DIR, 0777);
+    mkdir(RENDERS_DIR, 0777);
+    char path[128], rel[40];
+    render_output_path(path, sizeof(path), rel, sizeof(rel));
+    if (rel_out) std::snprintf(rel_out, rel_n, "%s", rel);
+    return write_wav(path, data.data(), total_frames, SR);
 }
 
 // globals (needed before save/load)
@@ -1074,10 +1099,12 @@ int main() {
         if (app.consume_render_request()) {
             // pause realtime audio briefly, render, resume
             // (realtime audio uses g_mixer and the live player, render has its own xmix/xplayer - no conflict)
-            bool ok = render_song_to_wav();
-            std::snprintf(app.slot_status, sizeof(app.slot_status),
-                          ok ? "rendered -> 3ds/descry/render.wav"
-                             : "RENDER FAILED (empty song?)");
+            char rel[40] = {0};
+            bool ok = render_song_to_wav(rel, sizeof(rel));
+            if (ok) std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                  "rendered -> renders/%s", rel);
+            else    std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                  "RENDER FAILED (empty song?)");
         }
 
         // === project menu actions ===

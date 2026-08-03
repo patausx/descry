@@ -89,13 +89,18 @@ void App::update_project(const InputState& in) {
     }
     if (in.y) { proj_action_slot = proj_slot_; proj_action = ProjAction::Save; }
     if (in.x) { proj_action_slot = proj_slot_; proj_action = ProjAction::New; }
-    // SELECT = render the song to sdmc:/3ds/descry/render.wav.
+    // SELECT = render the song to sdmc:/3ds/descry/renders/<project name>.wav.
     // the request flag was orphaned - render_song_to_wav() existed in main,
     // the help promised it, but no UI path ever set the flag. now it has a home.
+    // issue #6: the export used to be a single fixed render.wav, so a second
+    // render clobbered the first. it now follows the project name (hold R to
+    // edit it right here) and main appends _NN instead of overwriting.
     if (in.select_) {
+        char base[32];
+        seq::sanitize_basename(project_.name, base, sizeof(base));
         render_request_ = true;
         std::snprintf(slot_status, sizeof(slot_status),
-            "RENDERING SONG TO render.wav ...");
+            "RENDERING -> renders/%s.wav ...", base);
         slot_status_frame_ = frame_;
     }
     if (in.b) {
@@ -120,13 +125,13 @@ void App::draw_project(Draw& d) {
     constexpr int CELL_W = 94;
     constexpr int CELL_H = 40;
     constexpr int X0 = 10;
-    constexpr int Y0 = 44;
+    constexpr int Y0 = 54;   // was 44 - freed up for the render-target line
 
     char buf[48];
 
     // === header: title + current project banner ===
     d.text(10, 14, "PROJECT", pal::HEADER, 1);
-    d.text(66, 14, "A=LOAD Y=SAVE X=NEW B=DEL(2x) SEL=WAV", pal::FG_DIM);
+    d.text(66, 14, "A=LOAD Y=SAVE X=NEW B=DEL(2x) SEL=RENDER", pal::FG_DIM);
 
     // current project name line — doubles as rename target when R held
     {
@@ -143,7 +148,6 @@ void App::draw_project(Draw& d) {
         if (mod_r_) {
             // show R-mode hint instead of the save hint
             d.text(250, 28, "R:RENAME", pal::PLAY);
-
             // underline position: "NOW: " is 5 chars × 6px each = 30px offset
             int cur_x = 10 + 5 * 6 + rename_pos_ * 6;
             uint8_t blink = breathe_pulse(frame_, 20);
@@ -152,8 +156,20 @@ void App::draw_project(Draw& d) {
             // also show a small caret above
             d.rect(cur_x + 2, 26, 1, 2, ul_c);
         } else {
-            d.text(280, 28, "*=unsaved", pal::FG_DIM);
+            d.text(238, 28, "R=RENAME", pal::HEADER);
+            d.text(298, 28, "*=unsaved", pal::FG_DIM);
         }
+    }
+
+    // === render target (issue #6) ===
+    // the wav name follows the project name, so show exactly where SELECT will
+    // write BEFORE the render runs - and where to rename if it's wrong.
+    {
+        char base[32];
+        seq::sanitize_basename(project_.name, base, sizeof(base));
+        char line[64];
+        std::snprintf(line, sizeof(line), "SEL -> renders/%s.wav", base);
+        d.text(10, 42, line, mod_r_ ? pal::FG_DIM : pal::HEADER);
     }
 
     for (int i = 0; i < 16; ++i) {
