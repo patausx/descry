@@ -97,10 +97,10 @@ struct WavHeader {
     uint32_t data_size;
 };
 
-static bool write_wav(const char* path, const int16_t* samples, std::size_t frame_count, int sr) {
-    FILE* f = std::fopen(path, "wb");
-    if (!f) return false;
-    WavHeader h;
+// fill a stereo 16-bit WAV header for a known frame count.
+// (the old one-shot write_wav(buffer) helper is gone: the only caller was the
+// song render, which now streams to disk instead of buffering the whole song.)
+static void fill_wav_header(WavHeader& h, std::size_t frame_count, int sr) {
     std::memcpy(h.riff, "RIFF", 4);
     std::memcpy(h.wave, "WAVE", 4);
     std::memcpy(h.fmt,  "fmt ", 4);
@@ -112,12 +112,8 @@ static bool write_wav(const char* path, const int16_t* samples, std::size_t fram
     h.byte_rate = sr * 2 * 2;
     h.block_align = 2 * 2;
     h.bits_per_sample = 16;
-    h.data_size = frame_count * 2 * 2;
+    h.data_size = (uint32_t)(frame_count * 2 * 2);
     h.size = 36 + h.data_size;
-    std::fwrite(&h, sizeof(h), 1, f);
-    std::fwrite(samples, 2, frame_count * 2, f);
-    std::fclose(f);
-    return true;
 }
 
 // homebrew thread stack size - was about 32k by default, too small for our fx objects
@@ -144,49 +140,110 @@ static void render_output_path(char* path, std::size_t np, char* rel, std::size_
 
 // === render to wav (render the whole song) ===
 // writes to renders/<project name>[_NN].wav; `rel_out` receives that short name.
+//
+// three bugs lived here before:
+//  1. the offline Mixer was left at its DEFAULTS - no channel faders, no master
+//     volume, no delay/reverb settings, no duck. hours of mixing went into a
+//     file that sounded nothing like the device. now seq::Player::apply_song_mixer
+//     (the SAME function the live mixer view uses) is applied.
+//  2. `silence_frames > SR` cut the export at the first second of silence, so any
+//     breakdown / sparse ambient intro truncated the song.
+//  3. song playback loops forever, so the only stop condition was a hard 60s cap:
+//     longer songs were silently cropped. now Player::song_wrapped() marks one
+//     full pass and we keep rendering a tail so delay/reverb ring out.
 static bool render_song_to_wav(char* rel_out, std::size_t rel_n) {
+    mkdir("sdmc:/3ds", 0777);
+    mkdir(SAMPLE_DIR, 0777);
+    mkdir(RENDERS_DIR, 0777);
+    char path[128], rel[40], tmp_path[136];
+    render_output_path(path, sizeof(path), rel, sizeof(rel));
+    std::snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+
+    // stream straight to SD: a 10-minute song is ~77MB of PCM, which is far more
+    // than the 3DS has to spare - the old code accumulated the WHOLE render in a
+    // std::vector first. header is written with a placeholder length and patched
+    // at the end, and the file only gets its real name once it is complete.
+    FILE* f = std::fopen(tmp_path, "wb");
+    if (!f) return false;
+    WavHeader hdr{};
+    fill_wav_header(hdr, 0, 32000);
+    if (std::fwrite(&hdr, sizeof(hdr), 1, f) != 1) {
+        std::fclose(f); std::remove(tmp_path); return false;
+    }
+
     // Mixer + Player on the heap (~80kb total, dangerous on the stack)
     auto* xmix = new audio::Mixer();
     auto* xplayer = new seq::Player(g_project, *xmix);
+    // what you hear IS what you get: same song->mixer mapping as playback
+    seq::Player::apply_song_mixer(g_project, *xmix);
     xplayer->play_song(0);
 
     constexpr int SR = 32000;
-    constexpr std::size_t MAX_SECONDS = 60;
+    constexpr std::size_t MAX_SECONDS = 600;      // hard safety cap (10 min)
     constexpr std::size_t CHUNK = 1024;
-    std::vector<int16_t> data;
-    data.reserve(SR * 2 * 4);
+    // tail rendered after the song wraps, so delay/reverb decay into the file
+    // instead of being chopped off mid-repeat.
+    constexpr std::size_t TAIL_FRAMES = SR * 3;
+    // silence bail-out only applies to a song that never produced sound at all
+    // (all-empty / all-muted project) - not to musical rests.
+    constexpr std::size_t DEAD_START_FRAMES = SR * 4;
 
     int16_t buf[CHUNK * 2];
     std::size_t total_frames = 0;
-    std::size_t silence_frames = 0;
-    while (xplayer->playing() && total_frames < SR * MAX_SECONDS) {
+    std::size_t tail_frames = 0;
+    bool any_sound = false;
+    bool wrapped = false;
+    bool io_ok = true;
+
+    while (total_frames < SR * MAX_SECONDS) {
         xplayer->advance(CHUNK, SR);
         xmix->render((fx::q15*)buf, CHUNK);
-        data.insert(data.end(), buf, buf + CHUNK * 2);
+        if (std::fwrite(buf, sizeof(int16_t), CHUNK * 2, f) != CHUNK * 2) {
+            io_ok = false;   // SD full / yanked - stop, don't pretend it worked
+            break;
+        }
         total_frames += CHUNK;
-        bool any = false;
-        for (std::size_t i = 0; i < CHUNK * 2; ++i) if (buf[i] != 0) { any = true; break; }
-        if (!any) silence_frames += CHUNK;
-        else silence_frames = 0;
-        if (silence_frames > SR) break;
+
+        if (!any_sound) {
+            for (std::size_t i = 0; i < CHUNK * 2; ++i)
+                if (buf[i] != 0) { any_sound = true; break; }
+            // nothing at all in the first seconds = empty/muted song, give up
+            if (!any_sound && total_frames >= DEAD_START_FRAMES) break;
+        }
+
+        // one full pass through the song's content rows -> render the FX tail
+        if (!wrapped && xplayer->song_wrapped()) wrapped = true;
+        if (wrapped) {
+            tail_frames += CHUNK;
+            if (tail_frames >= TAIL_FRAMES) break;
+        }
+        // a track-driven stop (play_phrase-style end, empty song) also ends it
+        if (!xplayer->playing()) break;
     }
 
     for (int t = 0; t < seq::NUM_TRACKS; ++t) {
         xmix->clear_voices(t);
     }
-
     delete xplayer;
     delete xmix;
 
-    if (data.empty()) return false;
+    if (!io_ok || !any_sound || total_frames == 0) {
+        std::fclose(f);
+        std::remove(tmp_path);
+        return false;
+    }
 
-    mkdir("sdmc:/3ds", 0777);
-    mkdir(SAMPLE_DIR, 0777);
-    mkdir(RENDERS_DIR, 0777);
-    char path[128], rel[40];
-    render_output_path(path, sizeof(path), rel, sizeof(rel));
+    // patch the header now that the real length is known
+    fill_wav_header(hdr, total_frames, SR);
+    bool ok = std::fseek(f, 0, SEEK_SET) == 0
+           && std::fwrite(&hdr, sizeof(hdr), 1, f) == 1;
+    ok = (std::fclose(f) == 0) && ok;
+    if (!ok) { std::remove(tmp_path); return false; }
+
+    std::remove(path);
+    if (std::rename(tmp_path, path) != 0) { std::remove(tmp_path); return false; }
     if (rel_out) std::snprintf(rel_out, rel_n, "%s", rel);
-    return write_wav(path, data.data(), total_frames, SR);
+    return true;
 }
 
 // globals (needed before save/load)
