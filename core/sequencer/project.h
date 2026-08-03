@@ -85,6 +85,12 @@ public:
     uint8_t rev_size = 0;   // comb feedback / room size (0 -> default ~0.65)
     uint8_t rev_damp = 0;   // feedback lowpass damping  (0 -> default ~30%)
 
+    // v13 tail: per-track mute bitmask (bit t = track t muted).
+    // mute used to live ONLY in audio::TrackState, so it was lost on save AND
+    // wiped by every PLAY press. solo deliberately stays out of the file - it's
+    // a momentary stage tool, not part of the arrangement.
+    uint8_t track_mute = 0;
+
     // create a voice for the instrument (caller owns)
     audio::Voice* make_voice(uint8_t instrument_id);
 

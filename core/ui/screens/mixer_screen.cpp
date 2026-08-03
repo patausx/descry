@@ -23,36 +23,18 @@ namespace {
     };
 }
 
-// push song mixer settings into the audio mixer (called from update_mixer and
-// on project load via main's sync path - cheap, just assignments).
-static void sync_mixer(seq::Project& p, audio::Mixer& m) {
-    for (int t = 0; t < MX_TRACKS; ++t) {
-        m.track(t).mix_vol = (fx::q15)((int)p.song.track_vol[t] * fx::Q15_ONE / 255);
-        m.track(t).duck_amt = (fx::q15)((int)p.song.track_duck[t] * fx::Q15_ONE / 255);
-    }
-    m.master = (fx::q15)((int)p.song.master_vol * fx::Q15_ONE / 255);
-    // delay time: 0..255 -> 32..8160 frames (cap at DELAY_BUF-1)
-    std::size_t dt = (std::size_t)p.song.dly_time * 32;
-    if (dt < 32) dt = 32;
-    if (dt >= audio::Mixer::DELAY_BUF) dt = audio::Mixer::DELAY_BUF - 1;
-    m.delay_time     = dt;
-    m.delay_feedback = (fx::q15)((int)p.song.dly_fb  * fx::Q15_ONE / 255);
-    m.delay_wet      = (fx::q15)((int)p.song.dly_wet * fx::Q15_ONE / 255);
-    m.reverb_wet     = (fx::q15)((int)p.song.rev_wet * fx::Q15_ONE / 255);
-    // reverb character (Project tail, v12). 0 = legacy file -> defaults matching
-    // the old hardcoded comb values (fb 0.65, damp 30%).
-    {
-        int es = p.rev_size ? p.rev_size : 92;   // 0.50..0.92 comb feedback
-        int ed = p.rev_damp ? p.rev_damp : 85;   // 0..0.9 damping
-        m.reverb.set_room_size((fx::q15)(16384 + es * 54));
-        m.reverb.set_damping((fx::q15)(ed * 115));
-    }
-    // duck release: 0..255 -> ~2000..34000 frames (60ms..1.06s @32k)
-    m.duck_rel_frames = 2000u + (uint32_t)p.song.duck_rel * 125u;
-}
-
+// push song mixer settings into the audio mixer.
+// the actual mapping lives in seq::Player::apply_song_mixer (core) so the
+// offline renderer produces the same mix as playback.
+// solo is layered on top HERE, not in core: it's a momentary UI state, not part
+// of the project. without this the per-frame sync would stomp an active solo
+// with the persisted mute mask.
 void App::sync_mixer_from_song() {
-    sync_mixer(project_, mixer_);
+    seq::Player::apply_song_mixer(project_, mixer_);
+    if (solo_track_ >= 0 && solo_track_ < seq::NUM_TRACKS) {
+        for (int t = 0; t < seq::NUM_TRACKS; ++t)
+            mixer_.track(t).muted = (t != solo_track_);
+    }
 }
 
 void App::update_mixer(const InputState& in) {
@@ -87,7 +69,7 @@ void App::update_mixer(const InputState& in) {
         if (in.b) { int v = g - 1; if (v < 0) v = 0; g = (uint8_t)v; dirty = true; }
         if (in.x) { g = 6; dirty = true; }
         if (in.y) { g = 0; dirty = true; }
-        sync_mixer(project_, mixer_);
+        sync_mixer_from_song();
         return;
     }
 
@@ -132,15 +114,16 @@ void App::update_mixer(const InputState& in) {
         dirty = true;
     }
 
-    // SELECT on a track strip = mute toggle (matches song-view mute pads)
+    // SELECT on a track strip = mute toggle (matches song-view mute pads).
+    // writes the PROJECT mask (persisted + survives PLAY), mixer follows via sync.
     if (in.select_ && mixer_col_ < MX_TRACKS) {
-        auto& tr = mixer_.track(mixer_col_);
-        tr.muted = !tr.muted;
-        if (tr.muted) mixer_.note_off_all(mixer_col_);
+        project_.track_mute ^= (uint8_t)(1u << mixer_col_);
+        if (project_.track_mute & (1u << mixer_col_)) mixer_.note_off_all(mixer_col_);
+        mark_dirty();
     }
 
     // keep the audio mixer in sync every frame (cheap)
-    sync_mixer(project_, mixer_);
+    sync_mixer_from_song();
 }
 
 // === bottom-screen TOUCH FADERS (Mixer view) ===
@@ -218,12 +201,12 @@ void App::mixer_fader_touch(int x, int y, bool is_move) {
     // header tap = mute toggle (tap only - drags passing through don't flip it)
     if (!is_move && y < MF_Y + MF_HEAD) {
         if (!master) {
-            auto& tr = mixer_.track(i);
-            tr.muted = !tr.muted;
-            if (tr.muted) mixer_.note_off_all(i);
+            project_.track_mute ^= (uint8_t)(1u << i);
+            if (project_.track_mute & (1u << i)) mixer_.note_off_all(i);
         }
         mixer_col_ = i;
         mark_dirty();
+        sync_mixer_from_song();
         return;
     }
 
@@ -238,7 +221,7 @@ void App::mixer_fader_touch(int x, int y, bool is_move) {
     mixer_col_ = i;          // follow the finger with the cursor
     mark_dirty();
     // push into the audio mixer right away (don't wait for update_mixer)
-    sync_mixer(project_, mixer_);
+    sync_mixer_from_song();
 }
 
 void App::draw_mixer(Draw& d) {

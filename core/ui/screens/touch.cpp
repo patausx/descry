@@ -350,7 +350,7 @@ void App::touch(int x, int y) {
     }
 
     // === in song view - live track pads: tap = SOLO toggle ===
-    // (mute lives in the mixer faders now; solo is the stage tool)
+    // (mute lives in the mixer faders / project mask; solo is the stage tool)
     if (screen_ == Screen::Song && rec_mode_ != RecMode::Live && y >= 140) {
         constexpr int PAD_COLS = 4;
         constexpr int PAD_ROWS = 2;
@@ -361,12 +361,13 @@ void App::touch(int x, int y) {
         if (col < 0 || col >= PAD_COLS || row < 0 || row >= PAD_ROWS) return;
         int track = row * PAD_COLS + col;
         if (solo_track_ == track) {
-            // unsolo: everything back on
+            // unsolo: back to the PROJECT mute mask, not to "all on" - un-soloing
+            // used to silently clear every mute the user had set in the mixer.
             solo_track_ = -1;
             for (int t = 0; t < seq::NUM_TRACKS; ++t)
-                mixer_.track(t).muted = false;
+                mixer_.track(t).muted = (project_.track_mute & (1u << t)) != 0;
         } else {
-            // solo this track: mute all others
+            // solo this track: mute all others (project mask untouched)
             solo_track_ = track;
             for (int t = 0; t < seq::NUM_TRACKS; ++t) {
                 bool m = (t != track);

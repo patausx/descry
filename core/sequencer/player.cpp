@@ -25,12 +25,45 @@ void Player::reset_track_fx(int track) {
     tr.perf_hold  = 0;   // release any kaoss/stick param ownership
 }
 
+// project mixer block -> audio mixer. single source of truth, shared by the
+// mixer VIEW (live, every frame) and by the offline renderer.
+void Player::apply_song_mixer(const Project& p, audio::Mixer& m) {
+    for (int t = 0; t < NUM_TRACKS; ++t) {
+        m.track(t).mix_vol  = (fx::q15)((int)p.song.track_vol[t] * fx::Q15_ONE / 255);
+        m.track(t).duck_amt = (fx::q15)((int)p.song.track_duck[t] * fx::Q15_ONE / 255);
+        // persisted mute (Project tail, v13). solo stays UI-only.
+        m.track(t).muted = (p.track_mute & (1u << t)) != 0;
+    }
+    m.master = (fx::q15)((int)p.song.master_vol * fx::Q15_ONE / 255);
+    // delay time: 0..255 -> 32..DELAY_BUF-1 frames
+    std::size_t dt = (std::size_t)p.song.dly_time * 32;
+    if (dt < 32) dt = 32;
+    if (dt >= audio::Mixer::DELAY_BUF) dt = audio::Mixer::DELAY_BUF - 1;
+    m.delay_time     = dt;
+    m.delay_feedback = (fx::q15)((int)p.song.dly_fb  * fx::Q15_ONE / 255);
+    m.delay_wet      = (fx::q15)((int)p.song.dly_wet * fx::Q15_ONE / 255);
+    m.reverb_wet     = (fx::q15)((int)p.song.rev_wet * fx::Q15_ONE / 255);
+    // reverb character (Project tail, v12). 0 = legacy file -> the old hardcoded
+    // comb values (fb 0.65, damp 30%).
+    {
+        int es = p.rev_size ? p.rev_size : 92;
+        int ed = p.rev_damp ? p.rev_damp : 85;
+        m.reverb.set_room_size((fx::q15)(16384 + es * 54));
+        m.reverb.set_damping((fx::q15)(ed * 115));
+    }
+    // duck release: 0..255 -> ~2000..34000 frames (60ms..1.06s @32k)
+    m.duck_rel_frames = 2000u + (uint32_t)p.song.duck_rel * 125u;
+}
+
 void Player::play_song(uint16_t from_row) {
     audio::Mixer::LockGuard _g(mixer_);
-    // reset FX state of all tracks to defaults (so the start is clean)
+    song_wrapped_ = false;
+    // reset FX state of all tracks to defaults (so the start is clean).
+    // mutes come from the project, not from a blanket unmute: pressing PLAY used
+    // to silently un-mute every track the user had muted in the mixer.
     for (int t = 0; t < NUM_TRACKS; ++t) {
         reset_track_fx(t);
-        mixer_.track(t).muted = false;
+        mixer_.track(t).muted = (project_.track_mute & (1u << t)) != 0;
     }
     for (int t = 0; t < NUM_TRACKS; ++t) {
         auto& ts = tracks_[t];
@@ -60,6 +93,7 @@ void Player::play_song(uint16_t from_row) {
 
 void Player::play_phrase(int track, uint8_t phrase_id) {
     audio::Mixer::LockGuard _g(mixer_);
+    song_wrapped_ = false;
     auto& ts = tracks_[track];
     // reset the track's FX state so the phrase doesn't play through cutoff/send/bits left over from the song
     reset_track_fx(track);
@@ -85,6 +119,7 @@ void Player::play_phrase(int track, uint8_t phrase_id) {
 void Player::play_chain(int track, uint8_t chain_id) {
     audio::Mixer::LockGuard _g(mixer_);
     if (chain_id == EMPTY || project_.chains[chain_id].rows[0].phrase == EMPTY) return;
+    song_wrapped_ = false;
     auto& ts = tracks_[track];
     // reset the track's FX state (same as play_phrase)
     reset_track_fx(track);
@@ -567,7 +602,10 @@ void Player::next_song_row(int track) {
     ++ts.song_row;
     int len = song_content_rows();
     if (len == 0) { ts.playing = false; return; }   // empty song - nothing to follow
-    if (ts.song_row >= len) ts.song_row = 0;         // loop at the end of content
+    if (ts.song_row >= len) {
+        ts.song_row = 0;                            // loop at the end of content
+        song_wrapped_ = true;                       // one full pass done (render stop marker)
+    }
     ts.chain_id = project_.song.rows[ts.song_row].chain[track];
     ts.chain_row = 0;
     ts.step = 0;

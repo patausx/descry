@@ -146,6 +146,12 @@ int validate_project(Project& p) {
     for (auto& ts : p.table_speed)
         if (ts > 16) { ts = 16; ++fixed; }
 
+    // --- v13 tail: mute mask only has NUM_TRACKS meaningful bits ---
+    {
+        const uint8_t valid = (uint8_t)((1u << NUM_TRACKS) - 1);
+        if (p.track_mute & (uint8_t)~valid) { p.track_mute &= valid; ++fixed; }
+    }
+
     return fixed;
 }
 

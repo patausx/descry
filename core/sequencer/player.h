@@ -38,6 +38,15 @@ public:
     // exactly like the sequenced note.
     static void apply_inst_fx_defaults(const Instrument& inst, audio::TrackState& mt);
 
+    // push the project's mixer block (faders, mute mask, master, delay, reverb,
+    // duck) into an audio::Mixer. lives in core - NOT in the UI - because the
+    // offline renderer needs the exact same mapping the live engine uses.
+    // (it used to be a static helper inside the mixer VIEW, so render_song_to_wav
+    // exported a default-mixer version of the song: no faders, no sends, no
+    // reverb settings. what you heard was never what you got.)
+    // does not touch solo (UI-only, non-destructive).
+    static void apply_song_mixer(const Project& p, audio::Mixer& m);
+
     // call every audio block: advises how many frames until the next tick
     // and triggers steps when the tick arrives
     // fires due ticks, then consumes up to max_frames; returns frames consumed.
@@ -48,6 +57,12 @@ public:
 
     bool playing() const { return any_playing_; }
     const TrackPlayState& track_state(int i) const { return tracks_[i]; }
+
+    // true once ANY song-mode track has wrapped past the last content row, i.e.
+    // the song has played through exactly once. cleared by every play_*().
+    // the offline renderer uses this as its end-of-song marker: `playing()` is
+    // useless there because song playback loops forever by design.
+    bool song_wrapped() const { return song_wrapped_; }
 
 private:
     void trigger_step(int track);
@@ -78,6 +93,9 @@ private:
     uint32_t groove_pos_ = 0;
     int32_t  cur_tps_ = TICKS_PER_STEP;
     int      groove_tps_next();          // pull ticks-per-step for the step being started
+
+    // set by next_song_row when a song-mode track loops back to row 0
+    bool     song_wrapped_ = false;
 
     // === live mode queue state ===
     uint8_t  queued_chain_[NUM_TRACKS] = {EMPTY, EMPTY, EMPTY, EMPTY,
