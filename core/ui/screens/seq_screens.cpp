@@ -453,6 +453,8 @@ void App::update_chain(const InputState& in) {
     if (in.a) delta = +1;
     if (in.b) delta = -1;
     if (delta) {
+        edit_flash_frame_ = frame_;
+        mark_dirty();                 // same omission as the song view had
         if (chain_col_ == 0) {
             int v = (cell.phrase == seq::EMPTY) ? 0 : (cell.phrase + delta);
             if (v < 0) cell.phrase = seq::EMPTY;
@@ -539,6 +541,9 @@ void App::update_song(const InputState& in) {
     if (in.a) delta = +1;
     if (in.b) delta = -1;
     if (delta) {
+        edit_flash_frame_ = frame_;   // cell-edit feedback, same as the phrase view
+        mark_dirty();                 // song cell edits were NOT marking the project
+                                      // dirty at all - autosave/`*` silently missed them
         int v = (cell == seq::EMPTY) ? 0 : (cell + delta);
         if (v < 0) cell = seq::EMPTY;
         else if (v >= seq::MAX_CHAINS) cell = seq::MAX_CHAINS - 1;
@@ -926,22 +931,47 @@ void App::draw_song(Draw& d) {
             d.text(344, Y0, qb, lerp_color(pal::FG_DIM, pal::CURSOR, br));
         }
     }
+    // per-track silence state, needed in three places below (header tag, column
+    // wash, chain digits). muted = persisted project mask; solo-suppressed = the
+    // momentary stage tool. both are INAUDIBLE, so both must be visible HERE -
+    // the arrangement is what you stare at, the mixer is a place you visit.
+    bool silent[seq::NUM_TRACKS];
+    bool by_solo[seq::NUM_TRACKS];
+    for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+        bool m = (project_.track_mute & (1u << t)) != 0;
+        bool s = (solo_track_ >= 0 && t != solo_track_);
+        silent[t]  = m || s;
+        by_solo[t] = s && !m;
+    }
+
     for (int t = 0; t < seq::NUM_TRACKS; ++t) {
         char buf[4];
         std::snprintf(buf, sizeof(buf), "T%d", t);
-        d.text(40 + t * 42, Y0, buf, pal::HEADER);
+        d.text(40 + t * 42, Y0, buf, silent[t] ? pal::RECORD : pal::HEADER);
+        // mute/solo tag on the free 6px at the right of the track column. M = muted,
+        // S = the soloed track, s = silenced *because* someone else is soloed.
+        // (queue badge lives at +14, cutoff bar above it - this slot stays clear.)
+        if (silent[t]) {
+            d.text(40 + t * 42 + 33, Y0 + 5, by_solo[t] ? "s" : "M",
+                   by_solo[t] ? pal::FG_DIM : pal::RECORD);
+        } else if (solo_track_ == t) {
+            uint8_t br = breathe_pulse(frame_, 48);
+            d.text(40 + t * 42 + 33, Y0 + 5, "S", lerp_color(pal::PLAY, pal::FG, br));
+        }
         // mini cutoff/crush indicators alongside
         auto& tr = mixer_.track(t);
         // cutoff: horizontal bar 12px, filled by cutoff
         int cw = (tr.cutoff * 12) / fx::Q15_ONE;
-        // cutoff bar color changes with filter_type - a visual indicator with no extra pixels
-        uint32_t fc = pal::HEADER;  // LPF - ochre
+        // cutoff bar color changes with filter_type - a visual indicator with no
+        // extra pixels. THEMED (these used to be hardcoded cretaceous hexes, so on
+        // vapor/ember the indicators stayed earthy-grey in a violet UI).
+        uint32_t fc = pal::HEADER;
         switch (tr.filter_type) {
-            case ::trackr::dsp::FilterType::LPF:   fc = pal::HEADER; break;  // ochre
-            case ::trackr::dsp::FilterType::HPF:   fc = 0xFFAC9086; break;  // rose
-            case ::trackr::dsp::FilterType::BPF:   fc = 0xFFB4AB8F; break;  // khaki
-            case ::trackr::dsp::FilterType::Notch: fc = 0xFF796C64; break;  // warm grey-brown
-            case ::trackr::dsp::FilterType::Off:   fc = pal::GRID; break;  // steel grey
+            case ::trackr::dsp::FilterType::LPF:   fc = pal::HEADER; break;  // label ochre
+            case ::trackr::dsp::FilterType::HPF:   fc = pal::CURSOR; break;  // accent
+            case ::trackr::dsp::FilterType::BPF:   fc = pal::FG_HEX; break;  // value tint
+            case ::trackr::dsp::FilterType::Notch: fc = pal::TRACK3; break;  // 4th track hue
+            case ::trackr::dsp::FilterType::Off:   fc = pal::GRID;   break;  // structure grey
         }
         d.rect(40 + t * 42 + 14, Y0 + 2, 12, 2, pal::GRID);
         d.rect(40 + t * 42 + 14, Y0 + 2, cw, 2, fc);
@@ -972,6 +1002,12 @@ void App::draw_song(Draw& d) {
         }
     }
 
+    // where the arrangement ends: the player loops at song_length(), so everything
+    // below it is unreachable until you put a chain there. 256 identical empty rows
+    // gave zero hint of that - you scroll into the void wondering if it still plays.
+    const int song_len = player_.song_length();
+    int cursor_y = -1;
+
     for (int i = 0; i < VISIBLE; ++i) {
         int row = top_row + i;
         int y = Y0 + 12 + i * ROW_H;
@@ -983,6 +1019,12 @@ void App::draw_song(Draw& d) {
             // every 16th highlighted
             d.rect(0, y - 1, 400, ROW_H, pal::BG_HI);
         }
+
+        // dead zone past the end of the song (same language as the phrase view's
+        // out-of-length shading, lighter: these rows are still editable and writing
+        // a chain here extends the song).
+        if (song_len > 0 && row >= song_len)
+            d.rect(0, y - 1, 400, ROW_H, with_alpha(pal::PANEL, 0x70));
 
         // per-track playheads: each track advances through the song independently
         // (m8 model - chains of different lengths drift). so the playhead is a
@@ -1011,16 +1053,41 @@ void App::draw_song(Draw& d) {
 
         for (int t = 0; t < seq::NUM_TRACKS; ++t) {
             uint8_t c = sr.chain[t];
+            // silenced tracks read dim even where they have content - otherwise a
+            // muted column looks exactly as alive as a sounding one.
+            Color live = silent[t] ? pal::FG_DIM : pal::FG;
             if (c == seq::EMPTY) d.text(40 + t * 42, y, "--", pal::FG_DIM);
-            else d.hex2(40 + t * 42, y, c, pal::FG);
+            else d.hex2(40 + t * 42, y, c, live);
         }
 
-        if (row == song_row_) {
-            int cx = 39 + song_col_ * 42;
-            uint8_t br = breathe_pulse(frame_, 64);
-            ui::Color cur = lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br);
-            d.corner_brackets(cx, y - 1, 14, 10, cur, 3, 1);
+        // end-of-song line, drawn ON TOP of the cells so it can't be buried
+        if (song_len > 0 && row == song_len) {
+            d.rect(0, y - 1, 400, 1, pal::CURSOR);
+            d.text(346, y, "END", pal::CURSOR);
         }
+
+        if (row == song_row_) cursor_y = y;   // drawn last, above the mute wash
+    }
+
+    // muted columns get a wash over the whole grid height: the fastest "why is this
+    // silent" answer there is, and it survives scrolling. drawn OVER the playhead -
+    // a muted track still advances, it just makes no sound, and that's the point.
+    for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+        if (!silent[t]) continue;
+        d.rect(40 + t * 42 - 5, Y0 + 11, 32, VISIBLE * ROW_H,
+               with_alpha(pal::PANEL, by_solo[t] ? 0x50 : 0x70));
+    }
+
+    // cursor last: it must stay legible even inside a washed-out muted column
+    if (cursor_y >= 0) {
+        int cx = 39 + song_col_ * 42;
+        // value-flash on edit - the phrase view has had it forever; the song
+        // cursor felt dead under the fingers without it.
+        uint8_t ft = edit_flash_t();
+        if (ft) d.rect(cx, cursor_y - 1, 14, 10, with_alpha(pal::FLASH, ft / 2));
+        uint8_t br = breathe_pulse(frame_, 64);
+        ui::Color cur = lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br);
+        d.corner_brackets(cx, cursor_y - 1, 14, 10, cur, 3, 1);
     }
 }
 
@@ -1063,14 +1130,42 @@ void App::draw_song_timeline(Draw& d) {
     }
     d.text(2, Y0, "##", pal::HEADER);
 
+    // end-of-song boundary: everything right of it never plays (the song loops at
+    // song_length()). vertical line + tag, mirror of the list view's END row.
+    const int song_len = player_.song_length();
+    if (song_len > left_col && song_len < left_col + COLS) {
+        int ex = LX + (song_len - left_col) * CELL_W - 2;
+        d.rect(ex, LANE_Y0 - 2, 1, seq::NUM_TRACKS * LANE_H + 2, pal::CURSOR);
+        d.text(ex + 2, Y0, "END", pal::CURSOR);
+    }
+
+    // same silence bookkeeping as the list view (mute mask + momentary solo)
+    bool silent[seq::NUM_TRACKS], by_solo[seq::NUM_TRACKS];
+    for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+        bool m = (project_.track_mute & (1u << t)) != 0;
+        bool s = (solo_track_ >= 0 && t != solo_track_);
+        silent[t]  = m || s;
+        by_solo[t] = s && !m;
+    }
+
+    int cur_x = -1, cur_y = -1;
+
     for (int t = 0; t < seq::NUM_TRACKS; ++t) {
         int ly = LANE_Y0 + t * LANE_H;
         // lane separator
         d.rect(0, ly - 1, 400, 1, with_alpha(pal::GRID, 60));
-        // track label + live-queue badge
+        // track label + mute tag + live-queue badge
         char tb[4];
         std::snprintf(tb, sizeof(tb), "T%d", t);
-        d.text(2, ly + 3, tb, t == song_col_ ? pal::CURSOR : pal::HEADER);
+        d.text(2, ly + 3, tb, silent[t] ? pal::RECORD
+                                        : (t == song_col_ ? pal::CURSOR : pal::HEADER));
+        if (silent[t]) {
+            d.text(15, ly + 3, by_solo[t] ? "s" : "M",
+                   by_solo[t] ? pal::FG_DIM : pal::RECORD);
+        } else if (solo_track_ == t) {
+            uint8_t br = breathe_pulse(frame_, 48);
+            d.text(15, ly + 3, "S", lerp_color(pal::PLAY, pal::FG, br));
+        }
         uint8_t q = player_.queued(t);
         if (q != seq::EMPTY) {
             uint8_t br = breathe_pulse(frame_, 40);
@@ -1083,6 +1178,10 @@ void App::draw_song_timeline(Draw& d) {
         for (int c = 0; c < COLS; ++c) {
             int row = left_col + c;
             int x = LX + c * CELL_W;
+
+            // past the end of the song: unreachable until a chain lands there
+            if (song_len > 0 && row >= song_len)
+                d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PANEL, 0x70));
 
             // ghost trail: the cell the playhead just left fades out
             if (song_ph_prev_[t] != 0xFFFF && (int)song_ph_prev_[t] == row) {
@@ -1097,20 +1196,30 @@ void App::draw_song_timeline(Draw& d) {
                 d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PLAY_BG, 0xC0));
                 beat_glow(d, x - 2, ly + 1, CELL_W, LANE_H - 2,
                           frame_ - step_change_frame_, pal::PLAY, 12);
-                int pw = 2 + (int)tps.chain_row * (CELL_W - 2) / (seq::CHAIN_ROWS - 1);
+                int pw = 2 + (int)tps.play_chain_row * (CELL_W - 2) / (seq::CHAIN_ROWS - 1);
                 d.rect(x - 2, ly + LANE_H - 3, pw, 2, pal::PLAY);
             }
 
             uint8_t ch = project_.song.rows[row].chain[t];
             if (ch == seq::EMPTY) d.text(x, ly + 7, "--", pal::FG_DIM);
-            else                  d.hex2(x, ly + 7, ch, pal::FG);
+            else                  d.hex2(x, ly + 7, ch, silent[t] ? pal::FG_DIM : pal::FG);
 
-            if (row == song_row_ && t == song_col_) {
-                uint8_t br = breathe_pulse(frame_, 64);
-                ui::Color cur = lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br);
-                d.corner_brackets(x - 2, ly + 5, 16, 12, cur, 3, 1);
-            }
+            if (row == song_row_ && t == song_col_) { cur_x = x; cur_y = ly; }
         }
+
+        // muted lane wash across the full width, over the playhead
+        if (silent[t])
+            d.rect(LX - 2, ly + 1, COLS * CELL_W, LANE_H - 2,
+                   with_alpha(pal::PANEL, by_solo[t] ? 0x50 : 0x70));
+    }
+
+    // cursor last so it stays readable inside a washed-out lane
+    if (cur_x >= 0) {
+        uint8_t ft = edit_flash_t();
+        if (ft) d.rect(cur_x - 2, cur_y + 5, 16, 12, with_alpha(pal::FLASH, ft / 2));
+        uint8_t br = breathe_pulse(frame_, 64);
+        ui::Color cur = lerp_color(with_alpha(pal::CURSOR, 130), pal::CURSOR, br);
+        d.corner_brackets(cur_x - 2, cur_y + 5, 16, 12, cur, 3, 1);
     }
 
     // bottom strip: view hint + live-mode bar countdown

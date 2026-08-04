@@ -701,6 +701,17 @@ void App::draw_top(Draw& d) {
     std::snprintf(buf, sizeof(buf), "REC>%02d", rec_t);
     d.text(304, 3, buf, pal::RECORD, 1);
 
+    // === unsaved-changes dot ===
+    // the dirty flag used to be visible ONLY on the project screen, i.e. you had
+    // to leave what you were doing to learn whether it was saved. one dot in the
+    // always-on header answers it from every view. breathes so it reads as a state,
+    // not as decoration.
+    if (dirty) {
+        uint8_t br = breathe_pulse(frame_, 72);
+        Color dc = lerp_color(with_alpha(pal::CURSOR, 120), pal::CURSOR, br);
+        d.rect(346, 5, 4, 4, dc);
+    }
+
     // === clock + battery (right corner) ===
     // clock HH:MM
     if (clock_hour >= 0) {
