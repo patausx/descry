@@ -2216,7 +2216,7 @@ void App::draw_instrument(Draw& d) {
             // highlight the row level marker (brightness proportional to op.level)
             if (op.level > 0) {
                 int bar = (op.level * 12) / 127;
-                d.rect(GX + 14, y + 4, bar, 1, 0xFF516B43);
+                d.rect(GX + 14, y + 4, bar, 1, lerp_color(pal::PLAY, pal::BG, 90));
             }
         }
 

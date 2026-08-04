@@ -942,7 +942,7 @@ void App::draw_bottom(Draw& d) {
             const H* mh = mod_zl_ ? h_zl : (mod_l_ ? hl : hr);
             int  mn = mod_zl_ ? 6 : (mod_l_ ? hln : hrn);
             d.rect(4, 45, 16, 17, pal::CURSOR);
-            d.text(7, 50, tag, 0xFF313432);
+            d.text(7, 50, tag, pal::BG);   // knockout on the cursor chip (was a fixed cretaceous grey)
             int x = 26;
             for (int i = 0; i < mn; ++i) {
                 d.text(x, 46, mh[i].k, pal::CURSOR);
@@ -1187,6 +1187,31 @@ void App::draw_bottom(Draw& d) {
         }
         return false;
     };
+    // === themed key/pad colors ===
+    // these used to be hardcoded pink-and-ivory hexes, so the keyboard and the
+    // pads stayed cretaceous-rose on EVERY theme (vapor/ember/frost included).
+    // derive them from the live palette instead - computed per frame, never cached
+    // in statics (see the rule in draw.h).
+    const Color KEY_TOP   = lerp_color(pal::FG, 0xFFFFFFFF, 150);   // ivory face, theme-tinted
+    const Color KEY_BOT   = lerp_color(pal::FG, 0xFF000000, 90);    // shaded lower body
+    const Color KEY_EDGE  = lerp_color(pal::FG, 0xFFFFFFFF, 210);   // top/left light catch
+    const Color KEY_SEAM  = lerp_color(pal::BG, 0xFF000000, 60);    // seam to the next key
+    const Color KEY_LIP   = lerp_color(pal::FG, 0xFF000000, 130);   // base lip
+    const Color KEY_LIP2  = lerp_color(pal::BG, 0xFF000000, 90);
+    const Color KEY_LBL   = lerp_color(pal::BG, pal::FG_DIM, 90);   // "C4" on a white key
+    const Color BKEY_TOP  = lerp_color(pal::PANEL, pal::FG, 60);    // black key body
+    const Color BKEY_BOT  = lerp_color(pal::PANEL, 0xFF000000, 40);
+    const Color BKEY_SPEC = lerp_color(pal::PANEL, pal::FG, 110);   // glossy left edge
+    // pressed state: the theme's cursor accent, light on top / saturated below
+    const Color HIT_TOP   = lerp_color(pal::CURSOR, 0xFFFFFFFF, 90);
+    const Color HIT_BOT   = lerp_color(pal::CURSOR, 0xFF000000, 70);
+    const Color HIT_EDGE  = lerp_color(pal::CURSOR, 0xFFFFFFFF, 170);
+    const Color HIT_SINK  = lerp_color(pal::CURSOR, 0xFF000000, 120);
+    const Color HIT_LBL   = lerp_color(pal::CURSOR, 0xFF000000, 190);
+    // "last note" ghost: halfway between the face and the hit tint
+    const Color LAST_TOP  = lerp_color(KEY_TOP, HIT_TOP, 70);
+    const Color LAST_BOT  = lerp_color(KEY_BOT, HIT_BOT, 70);
+    const Color SCALE_DOT = lerp_color(pal::BG, pal::FG, 150);
 
     if (kb_mode_ == KbMode::Pads) {
         // === 4x4 performance pads (MPC-style, tall band from y=PADS_Y) ===
@@ -1239,12 +1264,16 @@ void App::draw_bottom(Draw& d) {
                 Draw::note_str((uint8_t)note, lbl);
             }
 
-            // pad body: rubbery gradient, warm tint when held, flash overlay on hit
-            ui::Color top = held ? 0xFFE8A8C8 : (filled ? 0xFF4A4E4C : 0xFF303432);
-            ui::Color bot = held ? 0xFFC07090 : (filled ? 0xFF262A28 : 0xFF1A1E1C);
+            // pad body: rubbery gradient, accent tint when held, flash overlay on hit
+            const Color PAD_TOP  = lerp_color(pal::BG, pal::FG, 55);   // filled pad face
+            const Color PAD_BOT  = lerp_color(pal::BG, 0xFF000000, 45);
+            const Color PADE_TOP = lerp_color(pal::BG, pal::GRID, 120); // empty pad face
+            const Color PADE_BOT = lerp_color(pal::PANEL, pal::BG, 120);
+            ui::Color top = held ? HIT_TOP : (filled ? PAD_TOP : PADE_TOP);
+            ui::Color bot = held ? HIT_BOT : (filled ? PAD_BOT : PADE_BOT);
             if (flash && !held) {
-                top = lerp_color(top, 0xFFE8A8C8, flash);
-                bot = lerp_color(bot, 0xFFC07090, flash);
+                top = lerp_color(top, HIT_TOP, flash);
+                bot = lerp_color(bot, HIT_BOT, flash);
             }
             constexpr int STEP = 4;
             for (int yy = 0; yy < h; yy += STEP) {
@@ -1253,19 +1282,19 @@ void App::draw_bottom(Draw& d) {
                 d.rect(x + 1, y + 1 + yy, w - 2, bandh, lerp_color(top, bot, t));
             }
             // edge: top catch + bottom lip
-            d.rect(x + 1, y + 1, w - 2, 1, held ? 0xFFFFB0D8 : 0xFF60646A);
-            d.rect(x + 1, y + h - 2, w - 2, 2, 0xFF000004);
+            d.rect(x + 1, y + 1, w - 2, 1, held ? HIT_EDGE : lerp_color(pal::GRID, pal::FG, 60));
+            d.rect(x + 1, y + h - 2, w - 2, 2, lerp_color(pal::PANEL, 0xFF000000, 120));
             // label bottom-left; note number for kits top-right
-            d.text(x + 5, y + h - 12, lbl, held ? 0xFF3A1028 : (filled ? pal::FG : pal::FG_DIM));
+            d.text(x + 5, y + h - 12, lbl, held ? HIT_LBL : (filled ? pal::FG : pal::FG_DIM));
             if (kit) {
                 char nn[4];
                 std::snprintf(nn, sizeof(nn), "%X", p);
-                d.text(x + w - 10, y + 4, nn, held ? 0xFF3A1028 : pal::FG_DIM);
+                d.text(x + w - 10, y + 4, nn, held ? HIT_LBL : pal::FG_DIM);
             }
             // velocity hint: thin bar on the left edge showing where Y maps loud/soft
             if (held) {
                 int vh = touch_vel_ * (h - 4) / 127;
-                d.rect(x + 2, y + h - 2 - vh, 2, vh, 0xFFFFB0D8);
+                d.rect(x + 2, y + h - 2 - vh, 2, vh, HIT_EDGE);
             }
         }
         return;
@@ -1287,10 +1316,10 @@ void App::draw_bottom(Draw& d) {
         int ky = KB_Y, kh = KB_H - 1;
 
         // body vertical gradient: ivory at top -> slightly grey at the bottom
-        ui::Color top = 0xFFF4F4EC;
-        ui::Color bot = 0xFFB8B8C0;
-        if (held) { top = 0xFFE8A8C8; bot = 0xFFC07090; }   // pressed: warm tint, darker
-        else if (last) { top = 0xFFF0D8E4; bot = 0xFFC8B0BC; }
+        ui::Color top = KEY_TOP;
+        ui::Color bot = KEY_BOT;
+        if (held) { top = HIT_TOP; bot = HIT_BOT; }          // pressed: accent tint, darker
+        else if (last) { top = LAST_TOP; bot = LAST_BOT; }
         // stepped gradient (bands of 4px) - cheap, looks smooth enough at this size
         constexpr int STEP = 4;
         for (int yy = 0; yy < kh; yy += STEP) {
@@ -1299,28 +1328,28 @@ void App::draw_bottom(Draw& d) {
             d.rect(kx, ky + yy, kw, bandh, lerp_color(top, bot, t));
         }
         // top highlight (light catches the top edge)
-        d.rect(kx, ky, kw, 1, held ? 0xFFC890A8 : 0xFFFFFFFF);
+        d.rect(kx, ky, kw, 1, held ? HIT_EDGE : KEY_EDGE);
         // left bevel (lighter) + right shadow (the seam to the next key)
-        d.rect(kx, ky, 1, kh, held ? 0xFFD098B0 : 0xFFFFFFFF);
-        d.rect(kx + kw - 1, ky, 1, kh, 0xFF60606A);
+        d.rect(kx, ky, 1, kh, held ? HIT_EDGE : KEY_EDGE);
+        d.rect(kx + kw - 1, ky, 1, kh, KEY_SEAM);
         // base lip - a darker band where the key meets the corpus
-        d.rect(kx, ky + kh - 3, kw, 3, held ? 0xFF905068 : 0xFF888892);
-        d.rect(kx, ky + kh - 1, kw, 1, 0xFF404048);
+        d.rect(kx, ky + kh - 3, kw, 3, held ? HIT_SINK : KEY_LIP);
+        d.rect(kx, ky + kh - 1, kw, 1, KEY_LIP2);
         // pressed keys sink: a shadow across the very top instead of highlight
-        if (held) d.rect(kx, ky, kw, 2, 0xFF7A4058);
+        if (held) d.rect(kx, ky, kw, 2, HIT_SINK);
 
         // label the C key
         if (i % 7 == 0) {
             char nlbl[4];
             std::snprintf(nlbl, sizeof(nlbl), "C%d", octave_ + oct);
-            d.text(x + 4, KB_Y + KB_H - 12, nlbl, 0xFF55555E);
+            d.text(x + 4, KB_Y + KB_H - 12, nlbl, KEY_LBL);
         }
         // scale marker: dot above the base lip on in-scale keys (root = accent ring)
         if (project_.song.scale_type) {
             const uint8_t st = project_.song.scale_type, sr = project_.song.scale_root;
             if (seq::scale_has(st, sr, note)) {
                 bool is_root = (note % 12) == (sr % 12);
-                ui::Color mc = is_root ? pal::CURSOR : 0xFF9090A0;
+                ui::Color mc = is_root ? pal::CURSOR : lerp_color(KEY_BOT, pal::BG, 120);
                 d.rect(kx + kw / 2 - 1, ky + kh - 8, 3, 3, mc);
                 if (is_root) d.rect(kx + kw / 2 - 2, ky + kh - 9, 5, 1, mc);
             }
@@ -1338,11 +1367,11 @@ void App::draw_bottom(Draw& d) {
             bool last = (note == last_kb_note_);
             int bx = cx - bw / 2;
 
-            // gradient body: charcoal -> near-black
-            ui::Color top = 0xFF3A3A44;
-            ui::Color bot = 0xFF121218;
-            if (held) { top = 0xFFD86098; bot = 0xFF803058; }
-            else if (last) { top = 0xFF5A4452; bot = 0xFF201822; }
+            // gradient body: charcoal -> near-black (theme-tinted)
+            ui::Color top = BKEY_TOP;
+            ui::Color bot = BKEY_BOT;
+            if (held) { top = lerp_color(pal::CURSOR, 0xFF000000, 40); bot = HIT_SINK; }
+            else if (last) { top = lerp_color(BKEY_TOP, pal::CURSOR, 80); bot = BKEY_BOT; }
             constexpr int BSTEP = 3;
             for (int yy = 0; yy < bh; yy += BSTEP) {
                 int bandh = (yy + BSTEP <= bh) ? BSTEP : (bh - yy);
@@ -1350,18 +1379,18 @@ void App::draw_bottom(Draw& d) {
                 d.rect(bx, KB_Y + yy, bw, bandh, lerp_color(top, bot, t));
             }
             // left specular highlight (a thin glossy reflection)
-            d.rect(bx, KB_Y, 1, bh - 2, held ? 0xFFF0A0C8 : 0xFF606070);
+            d.rect(bx, KB_Y, 1, bh - 2, held ? HIT_EDGE : BKEY_SPEC);
             // top edge catch
-            d.rect(bx, KB_Y, bw, 1, held ? 0xFFFFB0D8 : 0xFF505060);
+            d.rect(bx, KB_Y, bw, 1, held ? HIT_EDGE : BKEY_SPEC);
             // rounded base: a brighter front lip then a dark drop shadow under it
-            d.rect(bx, KB_Y + bh - 3, bw, 1, held ? 0xFFB04878 : 0xFF2A2A34);
-            d.rect(bx, KB_Y + bh - 2, bw, 2, 0xFF000004);
+            d.rect(bx, KB_Y + bh - 3, bw, 1, held ? HIT_SINK : lerp_color(BKEY_TOP, pal::PANEL, 120));
+            d.rect(bx, KB_Y + bh - 2, bw, 2, lerp_color(pal::PANEL, 0xFF000000, 120));
             // scale marker on in-scale black keys
             if (project_.song.scale_type &&
                 seq::scale_has(project_.song.scale_type, project_.song.scale_root, note)) {
                 bool is_root = (note % 12) == (project_.song.scale_root % 12);
                 d.rect(bx + bw / 2 - 1, KB_Y + bh - 8, 3, 3,
-                       is_root ? pal::CURSOR : 0xFF888898);
+                       is_root ? pal::CURSOR : SCALE_DOT);
             }
         }
     }

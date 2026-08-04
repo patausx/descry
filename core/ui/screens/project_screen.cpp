@@ -184,17 +184,18 @@ void App::draw_project(Draw& d) {
         bool confirm_load = (i == proj_confirm_load_);
         Color bg, border;
         if (confirm) {
-            // pending delete: pulse the terracotta so it feels alarmed
+            // pending delete: pulse the alarm colour so it feels alarmed.
+            // (was two hardcoded cretaceous browns - dead on every other theme.)
             uint8_t p = breathe_pulse(frame_, 24);
-            bg = lerp_color(0xFF5C3434, 0xFF7C4545, p);
+            bg = lerp_color(lerp_color(pal::BG, pal::RECORD, 140), pal::RECORD, p);
             border = pal::RECORD;
         } else if (confirm_load) {
-            // pending load-over-unsaved: amber pulse - caution, not alarm
+            // pending load-over-unsaved: accent pulse - caution, not alarm
             uint8_t p = breathe_pulse(frame_, 24);
-            bg = lerp_color(0xFF5C4A28, 0xFF7C6335, p);
+            bg = lerp_color(lerp_color(pal::BG, pal::HEADER, 140), pal::HEADER, p);
             border = pal::CURSOR;
         } else if (selected) {
-            bg = present ? 0xFF675239 : pal::GRID;
+            bg = present ? lerp_color(pal::BG_HI, pal::HEADER, 110) : pal::GRID;
             border = pal::CURSOR;
         } else if (present) {
             bg = pal::BG_HI;
