@@ -98,6 +98,18 @@ and the hint bar (hold ZL, L or R to see that modifier's combo map live).
 | ZL+SELECT | **deep clone** the chain — copies the chain and all its phrases |
 | touch pads (bottom) | per-track **solo** toggle |
 
+**reading the grid**
+
+| you see | it means |
+| --- | --- |
+| `END` + a line across the row | the last row with any chain. playback loops here; rows below are shaded and never play until you put a chain in one |
+| `M` next to a track label, column washed out | that track is **muted** (mixer / touch header, saved with the project) |
+| `S` next to a label | that track is **soloed** |
+| `s`, column dimmed | silenced only because another track is soloed — un-solo brings it back |
+
+mute is deliberately visible here and not just in the mixer: this is the screen
+you stare at, so "why is this silent" gets answered without leaving it.
+
 ### chain
 
 16 rows of phrase + transpose.
@@ -107,6 +119,9 @@ and the hint bar (hold ZL, L or R to see that modifier's combo map live).
 | A / B | edit phrase index / transpose (cursor column) |
 | SELECT | open the phrase under the cursor |
 | ZL+SELECT | clone the phrase into a free slot and point this row at the copy |
+
+while the transport runs, `▶T#` in the header tells you which track's playhead
+you are watching (a chain can be used by several tracks at once).
 
 ### phrase
 
@@ -125,6 +140,10 @@ and the hint bar (hold ZL, L or R to see that modifier's combo map live).
 | R+B | clear the whole step |
 | R+Y | clear the entire phrase |
 | L+left/right | switch to another phrase slot |
+
+the playhead follows **whatever track is playing this phrase** — not just track 0
+— and `▶T#` in the header names it. if two tracks share the phrase, the one under
+your song-view cursor wins.
 
 ### instrument
 
@@ -219,6 +238,11 @@ autosave writes `session.tr3d` on exit.
 | tap DESCRY logo | theme picker (6 themes) + scope style (WAVE / BARS / X-Y goniometer) |
 | tap BPM readout | tap tempo |
 | tap KEY readout | left half: cycle root · right half: cycle scale |
+
+**the header** is always on and always tells you: which screen you're on and its
+index, transport, BPM / groove, the mic record target, clock and battery — plus a
+small breathing **dot** left of the clock whenever the project has unsaved
+changes. no need to visit the project screen to check.
 
 ---
 

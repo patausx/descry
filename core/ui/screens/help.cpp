@@ -92,6 +92,30 @@ static const char* const pg_phrase[] = {
     nullptr
 };
 
+// --- page 3: reading the screen ---
+// the indicators used to be undocumented, which defeats the point of having
+// them: a wash or a letter you can't decode is just noise.
+static const char* const pg_read[] = {
+    "READING THE SCREEN",
+    "",
+    "header (always on):",
+    "  view + index, BPM, GRV, REC>slot, clock",
+    "  small pulsing DOT = unsaved changes",
+    "",
+    "song view track labels:",
+    "  M  track is MUTED (set in mixer)",
+    "  S  this track is SOLOed",
+    "  s  muted only BECAUSE another is solo",
+    "  washed-out column = you hear nothing",
+    "  END + line = last row with a chain;",
+    "  below it the song never plays (it loops)",
+    "",
+    "phrase / chain view:",
+    "  >T3 = whose playhead you are watching",
+    "  shaded rows = past the phrase LENGTH",
+    nullptr
+};
+
 // --- page 4: instruments ---
 static const char* const pg_inst[] = {
     "INSTRUMENT VIEW",
@@ -191,13 +215,14 @@ static const char* const pg_sd[] = {
 static const HelpPage kPages[] = {
     { "1. START HERE",   pg_basics  },
     { "2. GLOBAL KEYS",  pg_keys    },
-    { "3. PHRASE",       pg_phrase  },
-    { "4. INSTRUMENTS",  pg_inst    },
-    { "5. FX LIST A",    nullptr    },   // generated from fx.h
-    { "6. FX LIST B",    nullptr    },   // generated from fx.h
-    { "7. PERFORM",      pg_perform },
-    { "8. SAMPLING",     pg_files   },
-    { "9. FILES+EXPORT", pg_sd      },
+    { "3. READING UI",   pg_read    },
+    { "4. PHRASE",       pg_phrase  },
+    { "5. INSTRUMENTS",  pg_inst    },
+    { "6. FX LIST A",    nullptr    },   // generated from fx.h
+    { "7. FX LIST B",    nullptr    },   // generated from fx.h
+    { "8. PERFORM",      pg_perform },
+    { "9. SAMPLING",     pg_files   },
+    { "10.FILES+EXPORT", pg_sd      },
 };
 constexpr int N_PAGES = (int)(sizeof(kPages) / sizeof(kPages[0]));
 
@@ -209,14 +234,22 @@ constexpr int HLP_FOOT_Y = HLP_Y + HLP_H - 18;
 
 } // anon namespace
 
+// page indices into kPages - named so adding a page can't silently repoint
+// open_help() or the FX generator at the wrong content again.
+enum : int {
+    PG_BASICS = 0, PG_KEYS, PG_READ, PG_PHRASE, PG_INST,
+    PG_FX_A, PG_FX_B, PG_PERFORM, PG_SAMPLING, PG_SD
+};
+
 void App::open_help() {
     // land on the page matching the current screen
     switch (screen_) {
-        case Screen::Phrase:     help_page_ = 2; break;
-        case Screen::Instrument: help_page_ = 3; break;
-        case Screen::Mixer:      help_page_ = 6; break;
-        case Screen::Project:    help_page_ = 8; break;   // files + export page
-        default:                 help_page_ = 0; break;
+        case Screen::Song:       help_page_ = PG_READ;   break;   // mute / END markers
+        case Screen::Phrase:     help_page_ = PG_PHRASE; break;
+        case Screen::Instrument: help_page_ = PG_INST;   break;
+        case Screen::Mixer:      help_page_ = PG_PERFORM; break;
+        case Screen::Project:    help_page_ = PG_SD;     break;   // files + export page
+        default:                 help_page_ = PG_BASICS; break;
     }
     help_on_ = true;
     help_frame_ = frame_;
@@ -266,8 +299,8 @@ void App::draw_help(Draw& d) {
     } else {
         // FX reference pages: generated from the engine's own tables so the
         // help can never drift from what the player actually executes.
-        int base = (help_page_ == 4) ? 0 : FX_SPLIT;
-        int n    = (help_page_ == 4) ? FX_SPLIT : N_HELP_FX - FX_SPLIT;
+        int base = (help_page_ == PG_FX_A) ? 0 : FX_SPLIT;
+        int n    = (help_page_ == PG_FX_A) ? FX_SPLIT : N_HELP_FX - FX_SPLIT;
         d.text(HLP_X + 8, y0, "CMD  what it does", pal::HEADER);
         for (int i = 0; i < n; ++i) {
             uint8_t cmd = (uint8_t)kHelpFx[base + i];
