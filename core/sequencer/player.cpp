@@ -710,6 +710,12 @@ void Player::on_tick() {
         if (!ts.playing) continue;
 
         if (step_now) {
+            // remember what is being heard BEFORE any advance - the UI playhead
+            // reads these (ts.step/ts.phrase_id run one position ahead).
+            ts.play_step = ts.step;
+            ts.play_phrase_id = ts.phrase_id;
+            ts.play_chain_id = ts.chain_id;
+            ts.play_chain_row = ts.chain_row;
             trigger_step(t);
             // HOP: pending jump replaces the normal step advance so the target
             // step itself is the next one triggered.

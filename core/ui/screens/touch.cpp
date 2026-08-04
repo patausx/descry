@@ -315,8 +315,8 @@ void App::touch(int x, int y) {
             if (rec_mode_ == RecMode::Live && player_.playing()) {
                 for (int t = 0; t < seq::NUM_TRACKS; ++t) {
                     if (player_.track_state(t).playing &&
-                        player_.track_state(t).phrase_id == cur_phrase_) {
-                        int rs = (player_.track_state(t).step - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
+                        player_.track_state(t).play_phrase_id == cur_phrase_) {
+                        int rs = player_.track_state(t).play_step;
                         snapshot_step(rs); clear_step(rs); commit_step(rs);
                         edit_flash_frame_ = frame_;
                         mark_dirty();
@@ -396,7 +396,7 @@ void App::touch(int x, int y) {
         int rec_track = -1;
         for (int t = 0; t < seq::NUM_TRACKS; ++t) {
             if (player_.track_state(t).playing &&
-                player_.track_state(t).phrase_id == cur_phrase_) {
+                player_.track_state(t).play_phrase_id == cur_phrase_) {
                 rec_track = t;
                 break;
             }
@@ -405,12 +405,13 @@ void App::touch(int x, int y) {
             // cur_phrase isn't playing - fallback: write to track 0's phrase
             if (player_.track_state(0).playing) {
                 rec_track = 0;
-                cur_phrase_ = player_.track_state(0).phrase_id;
+                cur_phrase_ = player_.track_state(0).play_phrase_id;
             }
         }
         if (rec_track >= 0) {
-            // write to the step that's PLAYING NOW (ts.step already advanced to the next one, take -1)
-            int rec_step = (player_.track_state(rec_track).step - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
+            // write to the step that is SOUNDING right now (play_step, not step-1:
+            // the old arithmetic wrapped to 15 on every phrase boundary)
+            int rec_step = player_.track_state(rec_track).play_step;
             auto& step = project_.phrases[cur_phrase_].steps[rec_step];
             step.note = (uint8_t)note;
             step.instrument = cur_inst_;

@@ -657,10 +657,35 @@ void App::draw_phrase(Draw& d) {
         d.text(340, Y0, lb, plen < seq::PHRASE_STEPS ? pal::CURSOR : pal::FG_DIM);
     }
 
+    // playhead: ANY track can be playing the phrase we're looking at - bass on T0,
+    // hats on T3 is the norm. scanning only track 0 meant the cursor row you were
+    // editing showed no playhead at all whenever the phrase lived on another track.
+    // preference order: the track the cursor is "on" (song_col_) first, so a phrase
+    // used by two tracks follows the one you're working on; then the lowest track.
     int playing_step = -1;
-    if (player_.playing() && player_.track_state(0).phrase_id == cur_phrase_) {
-        // sync with the playing phrase if we're viewing this same phrase during playback
-        playing_step = player_.track_state(0).step;
+    int playing_track = -1;
+    if (player_.playing()) {
+        auto match = [&](int t) {
+            const auto& ts = player_.track_state(t);
+            return ts.playing && ts.play_phrase_id == cur_phrase_;
+        };
+        if (song_col_ >= 0 && song_col_ < seq::NUM_TRACKS && match(song_col_)) {
+            playing_track = song_col_;
+        } else {
+            for (int t = 0; t < seq::NUM_TRACKS; ++t)
+                if (match(t)) { playing_track = t; break; }
+        }
+        if (playing_track >= 0)
+            playing_step = player_.track_state(playing_track).play_step;
+    }
+
+    // which track the playhead follows (a phrase can be shared between tracks) -
+    // so the moving bar is never ambiguous. tiny play triangle + track number.
+    if (playing_track >= 0) {
+        for (int i = 0; i < 4; ++i) d.rect(300 + i, Y0 + i, 1, 7 - i * 2, pal::PLAY);
+        char tb[6];
+        std::snprintf(tb, sizeof(tb), "T%d", playing_track);
+        d.text(306, Y0, tb, pal::PLAY);
     }
 
     for (int row = 0; row < seq::PHRASE_STEPS; ++row) {
@@ -812,16 +837,31 @@ void App::draw_chain(Draw& d) {
     d.text(80, Y0, "PHR", pal::HEADER);
     d.text(140, Y0, "TSP", pal::HEADER);
 
-    // which chain row is currently playing? (any track whose active chain is this one)
+    // which chain row is currently playing? same rule as the phrase view: prefer
+    // the track the cursor is on, then the lowest one. play_chain_* is the row that
+    // is SOUNDING (chain_row already points at the next row after the last step).
     int playing_row = -1;
+    int playing_track = -1;
     if (player_.playing()) {
-        for (int t = 0; t < seq::NUM_TRACKS; ++t) {
-            const auto& tss = player_.track_state(t);
-            if (tss.playing && tss.chain_id != seq::EMPTY && tss.chain_id == cur_chain_) {
-                playing_row = tss.chain_row;
-                break;
-            }
+        auto match = [&](int t) {
+            const auto& ts = player_.track_state(t);
+            return ts.playing && ts.play_chain_id != seq::EMPTY &&
+                   ts.play_chain_id == cur_chain_;
+        };
+        if (song_col_ >= 0 && song_col_ < seq::NUM_TRACKS && match(song_col_)) {
+            playing_track = song_col_;
+        } else {
+            for (int t = 0; t < seq::NUM_TRACKS; ++t)
+                if (match(t)) { playing_track = t; break; }
         }
+        if (playing_track >= 0)
+            playing_row = player_.track_state(playing_track).play_chain_row;
+    }
+    if (playing_track >= 0) {
+        for (int i = 0; i < 4; ++i) d.rect(300 + i, Y0 + i, 1, 7 - i * 2, pal::PLAY);
+        char tb[6];
+        std::snprintf(tb, sizeof(tb), "T%d", playing_track);
+        d.text(306, Y0, tb, pal::PLAY);
     }
 
     for (int row = 0; row < seq::CHAIN_ROWS; ++row) {
@@ -963,7 +1003,7 @@ void App::draw_song(Draw& d) {
             d.rect(cx - 4, y - 1, 30, ROW_H, with_alpha(pal::PLAY_BG, 0xC0));
             beat_glow(d, cx - 4, y - 1, 30, ROW_H, frame_ - step_change_frame_, pal::PLAY, 12);
             // left tick grows as the chain advances (row progress at a glance)
-            int th = 2 + (int)tps.chain_row * (ROW_H - 2) / (seq::CHAIN_ROWS - 1);
+            int th = 2 + (int)tps.play_chain_row * (ROW_H - 2) / (seq::CHAIN_ROWS - 1);
             d.rect(cx - 4, y - 1, 2, th, pal::PLAY);
         }
 

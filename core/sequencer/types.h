@@ -114,7 +114,17 @@ struct TrackPlayState {
     uint8_t   chain_id = EMPTY;
     uint8_t   chain_row = 0;
     uint8_t   phrase_id = EMPTY;
-    uint8_t   step = 0;
+    uint8_t   step = 0;            // step to be triggered NEXT (advanced right after a trigger)
+    // step that was ACTUALLY triggered last (i.e. the one you can hear). the UI
+    // must draw the playhead here - `step` is already one ahead, and deriving it
+    // as (step-1) breaks on every phrase/chain boundary where step resets to 0.
+    uint8_t   play_step = 0;
+    // phrase that was sounding when play_step was triggered (phrase_id can already
+    // point at the NEXT chain row by the time the UI draws a frame). same story for
+    // the chain row: next_chain_row() runs right after the last step is triggered.
+    uint8_t   play_phrase_id = EMPTY;
+    uint8_t   play_chain_id = EMPTY;
+    uint8_t   play_chain_row = 0;
     int8_t    transpose = 0;
     // EVN condition: counts phrase passes on this track since play started
     // (increments every time the track finishes a phrase / starts the next row).

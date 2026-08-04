@@ -1515,7 +1515,7 @@ void App::tick() {
     int ps = -1;
     if (player_.playing()) {
         for (int t = 0; t < seq::NUM_TRACKS; ++t) {
-            if (player_.track_state(t).playing) { ps = player_.track_state(t).step; break; }
+            if (player_.track_state(t).playing) { ps = player_.track_state(t).play_step; break; }
         }
     }
     if (ps != last_playing_step_) {

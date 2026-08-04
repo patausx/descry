@@ -58,6 +58,11 @@ public:
     bool playing() const { return any_playing_; }
     const TrackPlayState& track_state(int i) const { return tracks_[i]; }
 
+    // last song row holding ANY chain, +1 (== the row the song loops at, and the
+    // row where the arrangement visually ends). public because the song view has
+    // to draw that boundary: without it 256 identical empty rows look playable.
+    int song_length() const { return song_content_rows(); }
+
     // true once ANY song-mode track has wrapped past the last content row, i.e.
     // the song has played through exactly once. cleared by every play_*().
     // the offline renderer uses this as its end-of-song marker: `playing()` is
