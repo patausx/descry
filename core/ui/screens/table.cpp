@@ -33,6 +33,7 @@ void App::update_table(const InputState& in) {
     if (in.b) delta = -1;
     if (in.x) delta = +16;
     if (in.y) delta = -16;
+    if (in.encoder_delta) delta = in.encoder_delta;
     if (delta) {
         auto& row = project_.tables[cur_table_].rows[table_row_];
         int slot = table_col_ / 2;
@@ -125,10 +126,10 @@ void App::draw_table(Draw& d) {
         if (r & 1) d.rect(0, y - 1, 400, ROW_H, pal::BG_HI);
         if (r == playing_row) {
             // flowing gradient sweep - tables tick fast, the glow rides the rows
-            d.rect(0, y - 1, 400, ROW_H, pal::PLAY_BG);
-            beat_glow(d, 0, y - 1, 400, ROW_H, frame_ - step_change_frame_, pal::PLAY, 10);
-            d.rect(0, y - 1, 3, ROW_H, pal::PLAY);
-            d.rect(397, y - 1, 3, ROW_H, pal::PLAY);
+            d.rect(0, y - 1, 400, ROW_H, pal::PLAYHEAD_BG);
+            beat_glow(d, 0, y - 1, 400, ROW_H, frame_ - step_change_frame_, pal::PLAYHEAD, 10);
+            d.rect(0, y - 1, 3, ROW_H, pal::PLAYHEAD);
+            d.rect(397, y - 1, 3, ROW_H, pal::PLAYHEAD);
         }
 
         d.hex2(COL_X[0], y, r, pal::FG_DIM);

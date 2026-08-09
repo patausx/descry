@@ -6,6 +6,7 @@
 #include "../../sequencer/scale.h"
 #include "../../audio/fixed.h"
 #include "../../sequencer/fx.h"
+#include "../../synth/fm.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -22,89 +23,6 @@ namespace {
 static const char kFxLetters[] = "PJVFQYBSEGALMNWRKXDOCHT";
 constexpr int N_FX_CMDS = (int)sizeof(kFxLetters) - 1;   // 23
 
-// === FX value widget: a typed visual indicator for the hint bar ===
-// draws a small graphic that represents the FX value's meaning, at (x,y), width w.
-// bx/by = bar origin; everything fits in a ~120px strip.
-static void draw_fx_widget(Draw& d, uint8_t cmd, uint8_t val, int x, int y, int w) {
-    using namespace seq;
-    const int h = 6;
-    const Color track = pal::GRID;   // unfilled bar background
-    const Color fillc = pal::HEADER;  // ochre fill
-    const Color markc = pal::CURSOR;  // dusty-rose marker
-
-    switch (cmd) {
-        case fx_cmd::PAN: {
-            // two end posts + a centre tick + a dot at the pan position.
-            // val: 00=hard L, 80=centre, FF=hard R.
-            d.rect(x, y - 1, 1, h + 2, fillc);             // left post
-            d.rect(x + w - 1, y - 1, 1, h + 2, fillc);     // right post
-            d.rect(x, y + h / 2, w, 1, track);             // the track line
-            d.rect(x + w / 2, y, 1, h, pal::FG_DIM);        // centre tick (dim)
-            int dot = x + (val * (w - 3)) / 255;           // dot position
-            d.rect(dot, y, 3, h, markc);                   // the pan dot
-            break;
-        }
-        case fx_cmd::PIT: {
-            // bipolar bar growing from centre. 80=0, >80 right(+), <80 left(-).
-            int mid = x + w / 2;
-            d.rect(x, y + h / 2, w, 1, track);
-            d.rect(mid, y - 1, 1, h + 2, pal::FG_DIM);      // zero line
-            int p = (int)val - 0x80;                        // -128..+127
-            if (p > 12) p = 12; if (p < -12) p = -12;       // matches engine clamp
-            int len = (p * (w / 2)) / 12;
-            if (len >= 0) d.rect(mid, y + 1, len + 1, h - 2, fillc);
-            else          d.rect(mid + len, y + 1, -len, h - 2, fillc);
-            break;
-        }
-        case fx_cmd::VOL: case fx_cmd::FIL: case fx_cmd::RES:
-        case fx_cmd::SND: case fx_cmd::SDL: case fx_cmd::SRV: case fx_cmd::CRU: {
-            // simple fill bar 0..FF
-            d.rect(x, y, w, h, track);
-            int fw = (val * w) / 255;
-            d.rect(x, y, fw, h, fillc);
-            break;
-        }
-        case fx_cmd::FTY: {
-            // show the selected filter type as text
-            const char* nm = "LPF";
-            switch (val) { case 1: nm="HPF"; break; case 2: nm="BPF"; break;
-                           case 3: nm="NTC"; break; case 4: nm="OFF"; break; }
-            d.text(x, y - 1, nm, markc);
-            break;
-        }
-        case fx_cmd::ARP: {
-            // two nibbles as +hi +lo semitone offsets
-            char b[12];
-            std::snprintf(b, sizeof(b), "+%d +%d", (val >> 4) & 0xF, val & 0xF);
-            d.text(x, y - 1, b, fillc);
-            break;
-        }
-        case fx_cmd::EVN: {
-            // "x/y" + a row of y pips with pip x lit (which pass fires)
-            int ex = (val >> 4) & 0xF, ey = val & 0xF;
-            if (ey <= 1) { d.text(x, y - 1, "ALWAYS", pal::FG_DIM); break; }
-            if (ex < 1) ex = 1; if (ex > ey) ex = ey;
-            char b[8];
-            std::snprintf(b, sizeof(b), "%d/%d", ex, ey);
-            d.text(x, y - 1, b, markc);
-            int px = x + 24;
-            for (int i = 0; i < ey && px + 3 <= x + w; ++i, px += 4)
-                d.rect(px, y, 3, h, (i == ex - 1) ? markc : track);
-            break;
-        }
-        case fx_cmd::KIL: case fx_cmd::OFF: case fx_cmd::DLY: {
-            // sub-tick gauge: TICKS_PER_STEP cells, lit up to val
-            int n = val; if (n > TICKS_PER_STEP) n = TICKS_PER_STEP;
-            for (int i = 0; i < TICKS_PER_STEP; ++i) {
-                Color c = (i < n) ? fillc : track;
-                d.rect(x + i * 4, y, 3, h, c);
-            }
-            break;
-        }
-        default:
-            break;   // HOP/TMP/LFO etc: number alone is clear enough
-    }
-}
 } // anon namespace
 
 // === FX help view (m8-style command picker on the bottom screen) ===
@@ -116,6 +34,14 @@ namespace {
     constexpr int FXH_COLS = 2, FXH_ROW_H = 11;        // tight rows: 23 cmds fit 2x12
     constexpr int FXH_ROWS_VIS = 12;                   // rows per column
     constexpr int FXH_COL_W = FXH_W / FXH_COLS;        // 156
+
+    constexpr int PT_X = 24, PT_Y = 94, PT_W = 272, PT_ROW_H = 11;
+    static const char* const kPhraseToolNames[] = {
+        "ROTATE UP", "ROTATE DOWN", "REVERSE",
+        "TRANSPOSE +1", "TRANSPOSE -1", "OCTAVE +12", "OCTAVE -12",
+        "VELOCITY +8", "VELOCITY -8", "VELOCITY RAMP UP", "VELOCITY RAMP DOWN",
+    };
+    constexpr int PT_COUNT = (int)(sizeof(kPhraseToolNames) / sizeof(kPhraseToolNames[0]));
 }
 
 void App::draw_fx_help(Draw& d) {
@@ -181,8 +107,162 @@ bool App::fx_help_touch(int x, int y) {
     return true;
 }
 
+void App::open_phrase_tools() {
+    const auto& ph = project_.phrases[cur_phrase_];
+    phrase_tools_range_ = sel_mode_;
+    if (sel_mode_) {
+        phrase_tools_lo_ = std::min(sel_anchor_, cursor_row_);
+        phrase_tools_hi_ = std::max(sel_anchor_, cursor_row_);
+    } else {
+        phrase_tools_lo_ = 0;
+        phrase_tools_hi_ = seq::phrase_len(ph) - 1;
+    }
+    phrase_tools_on_ = true;
+    fx_help_ = false;
+}
+
+void App::apply_phrase_tool(PhraseTool tool) {
+    int lo = phrase_tools_lo_, hi = phrase_tools_hi_;
+    if (lo < 0) lo = 0;
+    if (hi >= seq::PHRASE_STEPS) hi = seq::PHRASE_STEPS - 1;
+    if (lo > hi) return;
+
+    auto& ph = project_.phrases[cur_phrase_];
+    seq::PhraseStep before[seq::PHRASE_STEPS];
+    for (int r = lo; r <= hi; ++r) before[r] = ph.steps[r];
+
+    const int n = hi - lo + 1;
+    switch (tool) {
+        case PhraseTool::RotateUp:
+            if (n > 1) {
+                seq::PhraseStep first = ph.steps[lo];
+                for (int r = lo; r < hi; ++r) ph.steps[r] = ph.steps[r + 1];
+                ph.steps[hi] = first;
+            }
+            break;
+        case PhraseTool::RotateDown:
+            if (n > 1) {
+                seq::PhraseStep last = ph.steps[hi];
+                for (int r = hi; r > lo; --r) ph.steps[r] = ph.steps[r - 1];
+                ph.steps[lo] = last;
+            }
+            break;
+        case PhraseTool::Reverse:
+            for (int a = lo, b = hi; a < b; ++a, --b) std::swap(ph.steps[a], ph.steps[b]);
+            break;
+        case PhraseTool::TransposeUp:
+        case PhraseTool::TransposeDown:
+        case PhraseTool::OctaveUp:
+        case PhraseTool::OctaveDown: {
+            int delta = tool == PhraseTool::TransposeUp ? 1
+                      : tool == PhraseTool::TransposeDown ? -1
+                      : tool == PhraseTool::OctaveUp ? 12 : -12;
+            for (int r = lo; r <= hi; ++r) {
+                if (ph.steps[r].note == seq::EMPTY) continue;
+                int note = (int)ph.steps[r].note + delta;
+                if (note < 0) note = 0;
+                if (note > 127) note = 127;
+                ph.steps[r].note = (uint8_t)note;
+            }
+            break;
+        }
+        case PhraseTool::VelocityUp:
+        case PhraseTool::VelocityDown: {
+            int delta = tool == PhraseTool::VelocityUp ? 8 : -8;
+            for (int r = lo; r <= hi; ++r) {
+                if (ph.steps[r].note == seq::EMPTY) continue;
+                int vel = (int)ph.steps[r].velocity + delta;
+                if (vel < 1) vel = 1;
+                if (vel > 127) vel = 127;
+                ph.steps[r].velocity = (uint8_t)vel;
+            }
+            break;
+        }
+        case PhraseTool::RampUp:
+        case PhraseTool::RampDown:
+            for (int r = lo; r <= hi; ++r) {
+                if (ph.steps[r].note == seq::EMPTY) continue;
+                int pos = r - lo;
+                int vel = n <= 1 ? 127 : 32 + pos * 95 / (n - 1);
+                if (tool == PhraseTool::RampDown) vel = 159 - vel;
+                ph.steps[r].velocity = (uint8_t)vel;
+            }
+            break;
+        default: break;
+    }
+
+    // A transform is one user action even though the compact undo ring stores
+    // per-row deltas. Grouping preserves a single ZL+B undo/redo operation.
+    // Record only changed rows: no-op records do not exist, and this also keeps
+    // a sparse velocity operation comfortably within the small fixed ring.
+    bool changed = false;
+    undo_.begin_group();
+    for (int r = lo; r <= hi; ++r) {
+        if (std::memcmp(&before[r], &ph.steps[r], sizeof(seq::PhraseStep)) == 0) continue;
+        changed = true;
+        seq::EditRecord::Payload b{}, a{};
+        b.step = before[r];
+        a.step = ph.steps[r];
+        undo_.record(seq::EditKind::Step, cur_phrase_, (uint16_t)r, b, a, frame_, 0);
+    }
+    undo_.end_group();
+    if (changed) {
+        edit_flash_frame_ = frame_;
+        dirty = true;
+    }
+    phrase_tools_on_ = false;
+    sel_mode_ = false;
+}
+
+void App::draw_phrase_tools(Draw& d) {
+    constexpr int H = 20 + PT_COUNT * PT_ROW_H;
+    d.rect(PT_X - 2, PT_Y - 2, PT_W + 4, H + 4, pal::BG_HI);
+    d.rect(PT_X, PT_Y, PT_W, H, pal::BG);
+    char title[40];
+    std::snprintf(title, sizeof(title), "PHRASE TOOLS  %02X-%02X%s",
+                  phrase_tools_lo_, phrase_tools_hi_, phrase_tools_range_ ? " SEL" : "");
+    d.text(PT_X + 6, PT_Y + 4, title, pal::HEADER);
+    d.text(PT_X + PT_W - 78, PT_Y + 4, "A=DO B=X", pal::FG_DIM);
+    for (int i = 0; i < PT_COUNT; ++i) {
+        int y = PT_Y + 18 + i * PT_ROW_H;
+        bool sel = i == phrase_tool_sel_;
+        if (sel) d.rect(PT_X + 3, y - 1, PT_W - 6, PT_ROW_H, with_alpha(pal::CURSOR, 90));
+        d.text(PT_X + 9, y + 1, kPhraseToolNames[i], sel ? pal::FG : pal::FG_DIM);
+    }
+}
+
+bool App::phrase_tools_touch(int x, int y) {
+    if (x < PT_X || x >= PT_X + PT_W) return false;
+    int row = (y - (PT_Y + 18)) / PT_ROW_H;
+    if (y < PT_Y + 18 || row < 0 || row >= PT_COUNT) return false;
+    if (row == phrase_tool_sel_) apply_phrase_tool((PhraseTool)row);
+    else phrase_tool_sel_ = row;
+    return true;
+}
+
 void App::update_phrase(const InputState& in) {
     static constexpr int N_COLS = 9;  // note inst vel fx1c fx1v fx2c fx2v fx3c fx3v
+    const bool nav_up = in.up;
+    const bool nav_down = in.down;
+    const bool nav_left = in.left;
+    const bool nav_right = in.right;
+
+    // R+X opens phrase transforms. If a block selection is active its current
+    // range is captured; otherwise tools operate on the playable phrase length.
+    // The popup owns input until apply/cancel, so X can never fall through to CUT.
+    if (phrase_tools_on_) {
+        if (in.up || in.analog_y > 0 || in.encoder_delta > 0)
+            phrase_tool_sel_ = (phrase_tool_sel_ - 1 + PT_COUNT) % PT_COUNT;
+        if (in.down || in.analog_y < 0 || in.encoder_delta < 0)
+            phrase_tool_sel_ = (phrase_tool_sel_ + 1) % PT_COUNT;
+        if (in.a) apply_phrase_tool((PhraseTool)phrase_tool_sel_);
+        if (in.b || (in.held_r && in.x)) phrase_tools_on_ = false;
+        return;
+    }
+    if (in.held_r && in.x) {
+        open_phrase_tools();
+        return;
+    }
 
     // === selection mode (m8-style): ZL+SELECT toggles, cursor extends the range ===
     if (in.held_zl && in.select_) {
@@ -191,8 +271,8 @@ void App::update_phrase(const InputState& in) {
         return;
     }
     if (sel_mode_) {
-        if (in.up)   cursor_row_ = (cursor_row_ - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
-        if (in.down) cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
+        if (nav_up)   cursor_row_ = (cursor_row_ - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
+        if (nav_down) cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
         int lo = sel_anchor_ < cursor_row_ ? sel_anchor_ : cursor_row_;
         int hi = sel_anchor_ < cursor_row_ ? cursor_row_ : sel_anchor_;
         // A (or ZL+X, matching the single-step chord) = copy range + exit
@@ -261,6 +341,17 @@ void App::update_phrase(const InputState& in) {
         if (in.y) return;  // ZL+Y with empty clipboard: swallow, no-op
     }
 
+    // === SELECT on the INSTRUMENT column: drill into the instrument editor ===
+    // completes the m8 navigation chain song > chain > phrase > instrument.
+    // resolves the same way the engine (and the side panel) does: the step's own
+    // instrument, else the last one declared above it, else the edit instrument -
+    // so it opens what this row actually PLAYS, even on an empty inst cell.
+    if (in.select_ && !in.held_zl && !in.held_l && !in.held_r && cursor_col_ == 1) {
+        cur_inst_ = step_instrument_at(cursor_row_);
+        screen_ = Screen::Instrument;
+        return;
+    }
+
     // === FX help view (m8-style): SELECT on an FX-cmd column toggles the picker ===
     if (in.select_ && !in.held_zl && !in.held_l && !in.held_r &&
         (cursor_col_ == 3 || cursor_col_ == 5 || cursor_col_ == 7)) {
@@ -277,8 +368,8 @@ void App::update_phrase(const InputState& in) {
     }
     if (fx_help_) {
         // picker owns up/down/A/B while open
-        if (in.up)   fx_help_sel_ = (fx_help_sel_ - 1 + N_FX_CMDS) % N_FX_CMDS;
-        if (in.down) fx_help_sel_ = (fx_help_sel_ + 1) % N_FX_CMDS;
+        if (nav_up)   fx_help_sel_ = (fx_help_sel_ - 1 + N_FX_CMDS) % N_FX_CMDS;
+        if (nav_down) fx_help_sel_ = (fx_help_sel_ + 1) % N_FX_CMDS;
         if (in.a) {
             int slot = (cursor_col_ - 3) / 2;
             snapshot_step(cursor_row_);
@@ -290,21 +381,22 @@ void App::update_phrase(const InputState& in) {
         }
         if (in.b) { fx_help_ = false; return; }
         // left/right move the cursor to another fx column and keep the picker open
-        if (in.left)  cursor_col_ = (cursor_col_ - 1 + N_COLS) % N_COLS;
-        if (in.right) cursor_col_ = (cursor_col_ + 1) % N_COLS;
+        if (nav_left)  cursor_col_ = (cursor_col_ - 1 + N_COLS) % N_COLS;
+        if (nav_right) cursor_col_ = (cursor_col_ + 1) % N_COLS;
         if (cursor_col_ != 3 && cursor_col_ != 5 && cursor_col_ != 7) fx_help_ = false;
         return;
     }
 
-    if (in.up)    cursor_row_ = (cursor_row_ - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
-    if (in.down)  cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
-    if (in.left)  cursor_col_ = (cursor_col_ - 1 + N_COLS) % N_COLS;
-    if (in.right) cursor_col_ = (cursor_col_ + 1) % N_COLS;
+    if (nav_up)    cursor_row_ = (cursor_row_ - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
+    if (nav_down)  cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
+    if (nav_left)  cursor_col_ = (cursor_col_ - 1 + N_COLS) % N_COLS;
+    if (nav_right) cursor_col_ = (cursor_col_ + 1) % N_COLS;
 
-    // === quick erase (held R) ===
+    // === quick erase / phrase tools (held R) ===
     //   R + B - clear the WHOLE step (note/inst/vel/all fx)
     //   R + A - clear only the cell under the cursor
     //   R + Y - clear the ENTIRE phrase (one undo record per step)
+    //   R + X - open PHRASE TOOLS (caught above, before selection/CUT handling)
     if (in.held_r) {
         if (in.b) { snapshot_step(cursor_row_); clear_step(cursor_row_); commit_step(cursor_row_); dirty = true; }
         if (in.a) { snapshot_step(cursor_row_); clear_cell(cursor_row_, cursor_col_); commit_step(cursor_row_); dirty = true; }
@@ -323,6 +415,11 @@ void App::update_phrase(const InputState& in) {
     if (in.b) { snapshot_step(cursor_row_); edit_value(-1);  commit_step(cursor_row_); }
     if (in.x) { snapshot_step(cursor_row_); edit_value(+12); commit_step(cursor_row_); }  // big step
     if (in.y) { snapshot_step(cursor_row_); edit_value(-12); commit_step(cursor_row_); }
+    if (in.encoder_delta) {
+        snapshot_step(cursor_row_);
+        edit_value(in.encoder_delta);
+        commit_step(cursor_row_);
+    }
 }
 
 // === undo/redo glue ===
@@ -418,6 +515,10 @@ void App::clear_cell(int row, int col) {
 }
 
 void App::update_chain(const InputState& in) {
+    const bool nav_up = in.up;
+    const bool nav_down = in.down;
+    const bool nav_left = in.left;
+    const bool nav_right = in.right;
     // === ZL+SELECT = clone phrase under cursor (lsdj-style "make unique") ===
     // copies the phrase into a free slot and points THIS row at the copy;
     // every other place that used the old phrase keeps playing it untouched.
@@ -443,15 +544,16 @@ void App::update_chain(const InputState& in) {
         return;
     }
 
-    if (in.up)    chain_row_ = (chain_row_ - 1 + seq::CHAIN_ROWS) % seq::CHAIN_ROWS;
-    if (in.down)  chain_row_ = (chain_row_ + 1) % seq::CHAIN_ROWS;
-    if (in.left)  chain_col_ = (chain_col_ - 1 + 2) % 2;
-    if (in.right) chain_col_ = (chain_col_ + 1) % 2;
+    if (nav_up)    chain_row_ = (chain_row_ - 1 + seq::CHAIN_ROWS) % seq::CHAIN_ROWS;
+    if (nav_down)  chain_row_ = (chain_row_ + 1) % seq::CHAIN_ROWS;
+    if (nav_left)  chain_col_ = (chain_col_ - 1 + 2) % 2;
+    if (nav_right) chain_col_ = (chain_col_ + 1) % 2;
 
     auto& cell = project_.chains[cur_chain_].rows[chain_row_];
     int delta = 0;
     if (in.a) delta = +1;
     if (in.b) delta = -1;
+    if (in.encoder_delta) delta = in.encoder_delta;
     if (delta) {
         edit_flash_frame_ = frame_;
         mark_dirty();                 // same omission as the song view had
@@ -475,6 +577,10 @@ void App::update_chain(const InputState& in) {
 }
 
 void App::update_song(const InputState& in) {
+    const bool nav_up = in.up || in.analog_y > 0;
+    const bool nav_down = in.down || in.analog_y < 0;
+    const bool nav_left = in.left || in.analog_x < 0;
+    const bool nav_right = in.right || in.analog_x > 0;
     // === ZL+SELECT = DEEP clone chain under cursor ===
     // copies the chain AND all phrases inside it into free slots, so the new
     // chain is fully independent (edit anything without touching the original).
@@ -511,15 +617,15 @@ void App::update_song(const InputState& in) {
     // dpad nav: in timeline mode the axes rotate with the view -
     // left/right walk time (song rows), up/down hop tracks (lanes).
     if (song_timeline_) {
-        if (in.left)  song_row_ = (song_row_ - 1 + seq::SONG_ROWS) % seq::SONG_ROWS;
-        if (in.right) song_row_ = (song_row_ + 1) % seq::SONG_ROWS;
-        if (in.up)    song_col_ = (song_col_ - 1 + seq::NUM_TRACKS) % seq::NUM_TRACKS;
-        if (in.down)  song_col_ = (song_col_ + 1) % seq::NUM_TRACKS;
+        if (nav_left)  song_row_ = (song_row_ - 1 + seq::SONG_ROWS) % seq::SONG_ROWS;
+        if (nav_right) song_row_ = (song_row_ + 1) % seq::SONG_ROWS;
+        if (nav_up)    song_col_ = (song_col_ - 1 + seq::NUM_TRACKS) % seq::NUM_TRACKS;
+        if (nav_down)  song_col_ = (song_col_ + 1) % seq::NUM_TRACKS;
     } else {
-        if (in.up)    song_row_ = (song_row_ - 1 + seq::SONG_ROWS) % seq::SONG_ROWS;
-        if (in.down)  song_row_ = (song_row_ + 1) % seq::SONG_ROWS;
-        if (in.left)  song_col_ = (song_col_ - 1 + seq::NUM_TRACKS) % seq::NUM_TRACKS;
-        if (in.right) song_col_ = (song_col_ + 1) % seq::NUM_TRACKS;
+        if (nav_up)    song_row_ = (song_row_ - 1 + seq::SONG_ROWS) % seq::SONG_ROWS;
+        if (nav_down)  song_row_ = (song_row_ + 1) % seq::SONG_ROWS;
+        if (nav_left)  song_col_ = (song_col_ - 1 + seq::NUM_TRACKS) % seq::NUM_TRACKS;
+        if (nav_right) song_col_ = (song_col_ + 1) % seq::NUM_TRACKS;
     }
 
     // === live mode: Y = queue the chain under the cursor on its track (launches
@@ -540,6 +646,7 @@ void App::update_song(const InputState& in) {
     int delta = 0;
     if (in.a) delta = +1;
     if (in.b) delta = -1;
+    if (in.encoder_delta) delta = in.encoder_delta;
     if (delta) {
         edit_flash_frame_ = frame_;   // cell-edit feedback, same as the phrase view
         mark_dirty();                 // song cell edits were NOT marking the project
@@ -627,22 +734,342 @@ void App::edit_value(int delta) {
 
 // === draw ===
 
+// resolve which instrument a phrase step actually plays. the instrument column
+// is STICKY in the engine: an empty cell keeps whatever was declared above it.
+// the panel, the SELECT drill-down and anything else asking "what is this row?"
+// must agree, so the rule lives here once.
+uint8_t App::step_instrument_at(int row, bool* inherited) const {
+    const auto& ph = project_.phrases[cur_phrase_];
+    if (row >= 0 && row < seq::PHRASE_STEPS && ph.steps[row].instrument != seq::EMPTY) {
+        if (inherited) *inherited = false;
+        return ph.steps[row].instrument;
+    }
+    if (inherited) *inherited = true;
+    for (int r = row - 1; r >= 0; --r)
+        if (ph.steps[r].instrument != seq::EMPTY) return ph.steps[r].instrument;
+    return cur_inst_;
+}
+
+// === PHRASE SIDE PANEL (right third of the top screen) ===
+// the 3DS top screen is 400px - 80 wider than an M8's entire display. the grid
+// only needs 250, so the leftover third becomes a PERMANENT inspector instead
+// of the old 14px hint strip at the bottom.
+//
+// the rule for what earns a place here: it must be something you CANNOT see in
+// the grid but that decides how the step sounds. hence - the resolved
+// instrument (the column is sticky), its source (sample/wave/algo), its
+// envelope, its always-on FX defaults (applied before every trigger, invisible
+// in the phrase), and the step's own FX decoded into words.
+//
+// px = left edge of the panel (grid width).
+void App::draw_phrase_panel(Draw& d, int px) {
+    const int PX = px + 2, PW = 400 - PX, PY = 16;
+    d.rect(PX, PY, PW, 240 - PY, pal::PANEL);
+    d.rect(px, PY, 1, 240 - PY, pal::GRID);
+
+    bool inherited = false;
+    const auto& step = project_.phrases[cur_phrase_].steps[cursor_row_];
+    const uint8_t inst_id = step_instrument_at(cursor_row_, &inherited);
+    const auto& inst = project_.instruments[inst_id];
+    static const char* kType[] = { "NONE", "WAV", "SMP", "KIT", "FM", "DSN" };
+    const int ti = (int)inst.type < seq::INSTRUMENT_TYPE_COUNT ? (int)inst.type : 0;
+    const int trk_id = (song_col_ >= 0 && song_col_ < audio::NUM_TRACKS) ? song_col_ : 0;
+    const auto& trk = mixer_.track(trk_id);
+    char b[48];
+
+    auto rule = [&](int y) { d.rect(PX + 4, y, PW - 9, 1, pal::GRID); };
+    auto pct = [](int32_t v) -> int {
+        if (v < 0) v = 0;
+        if (v > fx::Q15_ONE) v = fx::Q15_ONE;
+        return (int)((int64_t)v * 99 / fx::Q15_ONE);
+    };
+    auto signed_pct = [](int32_t v) -> int {
+        if (v < -fx::Q15_ONE) v = -fx::Q15_ONE;
+        if (v >  fx::Q15_ONE) v =  fx::Q15_ONE;
+        return (int)((int64_t)v * 99 / fx::Q15_ONE);
+    };
+    auto time_text = [](uint32_t frames, char out[12]) {
+        uint32_t ms = frames / 32;
+        if (ms < 1000) std::snprintf(out, 12, "%ums", (unsigned)ms);
+        else std::snprintf(out, 12, "%u.%us", (unsigned)(ms / 1000),
+                           (unsigned)((ms % 1000) / 100));
+    };
+
+    // identity: resolved sticky instrument, name, and sound source.
+    std::snprintf(b, sizeof(b), "I%02X %s %s", inst_id, kType[ti],
+                  inst.poly ? "POLY" : "MONO");
+    d.text(PX + 4, 19, b, inherited ? pal::FG_DIM : pal::HEADER);
+    std::snprintf(b, sizeof(b), "%.22s", inst.name[0] ? inst.name : "(unnamed)");
+    d.text(PX + 4, 29, b, pal::FG);
+    b[0] = 0;
+    switch (inst.type) {
+        case seq::InstrumentType::Sampler: {
+            const auto& sm = synth::SampleBank::instance().slot(inst.sampler.sample_slot);
+            std::snprintf(b, sizeof(b), "%02d %.17s", inst.sampler.sample_slot,
+                          sm.name[0] ? sm.name : "EMPTY");
+            break;
+        }
+        case seq::InstrumentType::Wavsynth: {
+            static const char* kW[] = {"SINE","SAW","SQUARE","TRI","NOISE","USER"};
+            int wi = (int)inst.wavsynth.shape;
+            std::snprintf(b, sizeof(b), "%s  UNI %d", wi >= 0 && wi < 6 ? kW[wi] : "?",
+                          inst.wavsynth.unison);
+            break;
+        }
+        case seq::InstrumentType::FmSynth:
+            std::snprintf(b, sizeof(b), "ALGO %d %s", inst.fm.algorithm,
+                          synth::fm_algo_name(inst.fm.algorithm));
+            break;
+        case seq::InstrumentType::DsnSynth:
+            std::snprintf(b, sizeof(b), "%s+%s%s",
+                          synth::dsn_wave_name(inst.dsn.vco1_wave),
+                          synth::dsn_wave_name(inst.dsn.vco2_wave),
+                          inst.dsn.vco2_sync ? " SYNC" : "");
+            break;
+        case seq::InstrumentType::DrumKit:
+            std::snprintf(b, sizeof(b), "16 PAD KIT");
+            break;
+        default: break;
+    }
+    d.text(PX + 4, 39, b[0] ? b : "NO SOURCE", pal::FG_DIM);
+    if (inst.table_id != seq::EMPTY) {
+        std::snprintf(b, sizeof(b), "T%02X", inst.table_id);
+        d.text(PX + PW - 22, 39, b, pal::CURSOR);
+    }
+    rule(49);
+
+    // primary audible envelope, with honest millisecond values.
+    uint32_t a = 0, dc = 0, r = 0; int32_t s = 0;
+    int env_idx = 0; bool has_env = true;
+    switch (inst.type) {
+        case seq::InstrumentType::Wavsynth:
+            a = inst.wavsynth.attack; dc = inst.wavsynth.decay;
+            s = inst.wavsynth.sustain; r = inst.wavsynth.release; break;
+        case seq::InstrumentType::Sampler:
+            a = inst.sampler.attack; dc = inst.sampler.decay;
+            s = inst.sampler.sustain; r = inst.sampler.release; break;
+        case seq::InstrumentType::DsnSynth:
+            a = inst.dsn.eg1_attack; dc = inst.dsn.eg1_decay;
+            s = inst.dsn.eg1_sustain; r = inst.dsn.eg1_release; break;
+        case seq::InstrumentType::FmSynth: {
+            uint8_t cm = synth::fm_algo_carrier_mask(inst.fm.algorithm);
+            int best = 0, best_lvl = -1;
+            for (int i = 0; i < synth::FM_NUM_OPS; ++i)
+                if ((cm >> i) & 1 && inst.fm.ops[i].level > best_lvl) {
+                    best = i; best_lvl = inst.fm.ops[i].level;
+                }
+            const auto& op = inst.fm.ops[best];
+            a = op.attack; dc = op.decay; r = op.release;
+            s = (int32_t)op.sustain * fx::Q15_ONE / 127; env_idx = best;
+            std::snprintf(b, sizeof(b), "OP%d", best + 1);
+            d.text(PX + PW - 22, 52, b, pal::FG_DIM);
+            break;
+        }
+        default: has_env = false; break;
+    }
+    d.text(PX + 4, 52, "ENV", pal::HEADER);
+    const int EX = PX + 4, EY = 61, EW = PW - 10, EH = 25;
+    d.rect(EX, EY, EW, EH, with_alpha(pal::BG_HI, 0x80));
+    if (has_env) {
+        env_curve(d, EX, EY, EW, EH, a, dc, s, r, -1, pal::CURSOR, pal::PLAY);
+        bool done = false;
+        for (int t = 0; t < audio::NUM_TRACKS && !done; ++t)
+            for (int k = 0; k < audio::TRACK_POLY; ++k) {
+                auto* v = mixer_.track(t).voices[k];
+                if (!v || !v->active() || v->inst_id != inst_id) continue;
+                int st = v->ui_env_stage(env_idx); if (st <= 0) continue;
+                env_live_dot(d, EX, EY, EW, EH, a, dc, s, r, st,
+                             v->ui_env_level(env_idx), breathe_pulse(frame_, 24));
+                done = true; break;
+            }
+    } else {
+        d.text(EX + 4, EY + 8,
+               inst.type == seq::InstrumentType::DrumKit ? "ONE SHOT" : "NO ENVELOPE",
+               pal::FG_DIM);
+    }
+    static const char* env_l[] = {"A", "D", "S", "R"};
+    char tv[4][12];
+    time_text(a, tv[0]); time_text(dc, tv[1]);
+    std::snprintf(tv[2], 12, "%d%%", pct(s)); time_text(r, tv[3]);
+    for (int i = 0; i < 4; ++i) {
+        int x = EX + i * EW / 4;
+        d.text(x, 89, env_l[i], pal::HEADER);
+        d.text(x, 98, has_env ? tv[i] : "--", pal::FG_HEX);
+    }
+    rule(108);
+
+    // Modulation monitor. Values and phase come from the running DSP, while
+    // rate is translated back to the actual 0.1..20 Hz range used by Mg.
+    static const char* kMW[] = {"TRI", "SAW", "SQR", "S&H"};
+    auto hz10 = [](int32_t rate) -> int {
+        if (rate < 0) rate = 0;
+        if (rate > fx::Q15_ONE) rate = fx::Q15_ONE;
+        return 1 + (int)((int64_t)rate * 199 / fx::Q15_ONE);
+    };
+    auto wave_value = [](uint8_t wave, uint32_t phase, int16_t held) -> int32_t {
+        const uint32_t p = phase >> 16;
+        switch (wave & 3) {
+            case 0: return p < 32768 ? (int32_t)p * 2 - 32768
+                                     : 32767 - ((int32_t)p - 32768) * 2;
+            case 1: return (int32_t)p - 32768;
+            case 2: return p < 32768 ? 32767 : -32767;
+            default: return held;
+        }
+    };
+    auto draw_wave = [&](int x, int y, int w, int h, uint8_t wave,
+                         uint32_t phase, int32_t live, bool dot) {
+        d.rect(x, y, w, h, with_alpha(pal::BG_HI, 0x80));
+        int prev = y + h / 2;
+        for (int ix = 0; ix < w; ++ix) {
+            uint32_t ph = (uint32_t)((uint64_t)ix * 0xffffffffu / (w - 1));
+            // S&H's preview is deterministic; its dot still uses the real hold.
+            int16_t sh = (int16_t)((((ix * 5 + 3) & 7) - 4) * 7000);
+            int32_t v = wave_value(wave, ph, sh);
+            int yy = y + h / 2 - v * (h / 2 - 1) / 32768;
+            int ya = yy < prev ? yy : prev;
+            int yh = yy < prev ? prev - yy + 1 : yy - prev + 1;
+            d.rect(x + ix, ya, 1, yh, pal::PLAY);
+            prev = yy;
+        }
+        if (dot) {
+            int dx = x + (int)((uint64_t)(phase >> 16) * (w - 1) / 65535);
+            int dy = y + h / 2 - live * (h / 2 - 1) / 32768;
+            d.rect(dx - 1, dy - 1, 3, 3, pal::CURSOR);
+        }
+    };
+    auto route = [&](char* out, size_t n, const char* a, int32_t av,
+                     const char* c, int32_t cv) {
+        if (!av && !cv) std::snprintf(out, n, "OFF");
+        else if (av && cv) std::snprintf(out, n, "%s%+d %s%+d", a, signed_pct(av), c, signed_pct(cv));
+        else if (av) std::snprintf(out, n, "%s%+d", a, signed_pct(av));
+        else std::snprintf(out, n, "%s%+d", c, signed_pct(cv));
+    };
+
+    if (inst.type == seq::InstrumentType::DsnSynth) {
+        uint32_t phase[2] = {0, 0};
+        int32_t value[2] = {0, 0};
+        bool live = false;
+        for (int t = 0; t < audio::NUM_TRACKS && !live; ++t)
+            for (int k = 0; k < audio::TRACK_POLY; ++k) {
+                auto* v = mixer_.track(t).voices[k];
+                if (!v || !v->active() || v->inst_id != inst_id) continue;
+                for (int m = 0; m < 2; ++m) {
+                    phase[m] = v->ui_mg_phase(m);
+                    value[m] = v->ui_mg_value(m);
+                }
+                live = true;
+                break;
+            }
+        const uint8_t waves[2] = {inst.dsn.mg1_wave, inst.dsn.mg2_wave};
+        const int32_t rates[2] = {inst.dsn.mg1_rate, inst.dsn.mg2_rate};
+        const int32_t r1[2] = {inst.dsn.mg1_to_pitch, inst.dsn.mg2_to_pw};
+        const int32_t r2[2] = {inst.dsn.mg1_to_cutoff, inst.dsn.mg2_to_vca};
+        const char* n1[2] = {"P", "PW"};
+        const char* n2[2] = {"C", "V"};
+        for (int m = 0; m < 2; ++m) {
+            int y = 111 + m * 19;
+            int h10 = hz10(rates[m]);
+            std::snprintf(b, sizeof(b), "MG%d %s %d.%dHz", m + 1,
+                          kMW[waves[m] & 3], h10 / 10, h10 % 10);
+            d.text(PX + 4, y, b, pal::HEADER);
+            draw_wave(PX + 4, y + 9, 40, 8, waves[m], phase[m], value[m], live);
+            route(b, sizeof(b), n1[m], r1[m], n2[m], r2[m]);
+            d.text(PX + 49, y + 9, b, b[0] == 'O' ? pal::FG_DIM : pal::FG);
+        }
+    } else {
+        const uint8_t wave = trk.mg_wave & 3;
+        const int h10 = hz10(trk.mg_rate);
+        std::snprintf(b, sizeof(b), "MG %s %d.%dHz", kMW[wave], h10 / 10, h10 % 10);
+        d.text(PX + 4, 111, b, pal::HEADER);
+        const int32_t live = wave_value(wave, trk.mg.phase, trk.mg.sh_value);
+        draw_wave(PX + 4, 121, 56, 23, wave, trk.mg.phase, live, true);
+        route(b, sizeof(b), "C", trk.mg_to_cutoff, "V", trk.mg_to_vca);
+        d.text(PX + 65, 123, b, b[0] == 'O' ? pal::FG_DIM : pal::FG);
+        d.text(PX + 65, 134, "CUT / VCA", pal::FG_DIM);
+    }
+    rule(149);
+
+    // The selected row's three actual commands are more useful here than
+    // duplicate CUT/RES/PAN knobs: the grid gives raw cells, this decodes them.
+    d.text(PX + 4, 152, "STEP FX", pal::HEADER);
+    std::snprintf(b, sizeof(b), "VEL %02X", step.velocity);
+    d.text(PX + PW - 40, 152, b, pal::FG_DIM);
+    for (int slot = 0; slot < 3; ++slot) {
+        const int y = 162 + slot * 12;
+        const uint8_t cmd = step.fx[slot].cmd;
+        const bool sel = cursor_col_ >= 3 && cursor_col_ <= 8 &&
+                         (cursor_col_ - 3) / 2 == slot;
+        if (sel) {
+            uint8_t br = breathe_pulse(frame_, 48);
+            d.rect(PX + 2, y - 2, PW - 6, 11,
+                   with_alpha(pal::CURSOR, (uint8_t)(30 + br / 8)));
+            d.rect(PX + 2, y - 2, 2, 11, pal::CURSOR);
+        }
+        std::snprintf(b, sizeof(b), "%d", slot + 1);
+        d.text(PX + 5, y, b, sel ? pal::FG : pal::FG_DIM);
+        if (!cmd) {
+            d.text(PX + 16, y, "---", pal::FG_DIM);
+            d.text(PX + 58, y, "EMPTY", pal::FG_DIM);
+            continue;
+        }
+        d.text(PX + 16, y, seq::fx_name_short(cmd), pal::HEADER);
+        d.hex2(PX + 40, y, step.fx[slot].value, pal::FG);
+        const int max_name = (PW - 64) / 6;
+        std::snprintf(b, sizeof(b), "%.*s", max_name, seq::fx_name_long(cmd));
+        d.text(PX + 58, y, b, pal::FG_DIM);
+    }
+    rule(198);
+
+    // actual master stereo peaks plus a live master waveform. Nothing decorative:
+    // both read the same post-mix buffers as the full-screen scope.
+    d.text(PX + 4, 201, "MASTER", pal::HEADER);
+    int32_t pl = 0, pr = 0;
+    for (int i = 0; i < 128; ++i) {
+        std::size_t si = (mixer_.scope_write_pos + audio::Mixer::SCOPE_SIZE - 1 - i) % audio::Mixer::SCOPE_SIZE;
+        int32_t l = mixer_.scope_l[si]; if (l < 0) l = -l;
+        int32_t rr = mixer_.scope_r[si]; if (rr < 0) rr = -rr;
+        if (l > pl) pl = l;
+        if (rr > pr) pr = rr;
+    }
+    const int BW = 54;
+    d.text(PX + 4, 212, "L", pal::FG_DIM); d.rect(PX + 11, 213, BW, 5, pal::BG_HI);
+    d.text(PX + 4, 222, "R", pal::FG_DIM); d.rect(PX + 11, 223, BW, 5, pal::BG_HI);
+    d.rect(PX + 11, 213, (int)(pl * BW / 32767), 5, pl > 29490 ? pal::RECORD : pal::PLAY);
+    d.rect(PX + 11, 223, (int)(pr * BW / 32767), 5, pr > 29490 ? pal::RECORD : pal::PLAY);
+    const int SX = PX + 70, SY = 207, SW = PW - 76, SH = 29, SM = SY + SH / 2;
+    d.rect(SX, SY, SW, SH, with_alpha(pal::BG_HI, 0x80));
+    int py = SM;
+    for (int x = 0; x < SW; ++x) {
+        std::size_t si = (mixer_.scope_write_pos + (std::size_t)(x * audio::Mixer::SCOPE_SIZE / SW)) % audio::Mixer::SCOPE_SIZE;
+        int yy = SM - (int32_t)mixer_.scope[si] * (SH / 2 - 1) / 32768;
+        int ya = yy < py ? yy : py, yh = yy < py ? py - yy + 1 : yy - py + 1;
+        d.rect(SX + x, ya, 1, yh, pal::PLAY); py = yy;
+    }
+}
+
 void App::draw_phrase(Draw& d) {
     // layout: header (Y=20), 16 rows x columns
     // compact: row#  NOTE INST VEL  FX1 FX2 FX3
-    // 6 main columns
+    // the grid now lives in the LEFT 250px; the right third is a permanent
+    // inspector panel (instrument identity + envelope + decoded FX). every
+    // full-width element below is clipped to GRID_W so nothing bleeds under it.
     constexpr int Y0 = 22;
     constexpr int ROW_H = 12;   // 16 rows * 12 = 192px (34..226), leaves the FX hint bar
                                 // at y=228 a clean strip below the grid (no more step-16 overlap)
+    constexpr int GRID_W = 250;  // playfield width; panel owns 252..400
     constexpr int COL_X[] = {
-        14,  // row#
-        38,  // note
-        72,  // inst
-        100, // vel
-        132, // fx1 cmd+val
-        180, // fx2
-        228  // fx3
+        6,   // row#
+        28,  // note
+        62,  // inst
+        90,  // vel
+        122, // fx1 cmd+val
+        166, // fx2
+        210  // fx3
     };
+    // Subtle full-height rules make the dense tracker cells read as columns,
+    // matching the generated layout without spending pixels on decoration.
+    // Each rule sits in the dead space between two editable cells.
+    constexpr int COL_SEP[] = { 22, 55, 84, 115, 159, 203 };
 
     // header row
     d.text(COL_X[0], Y0, "##", pal::HEADER);
@@ -652,15 +1079,6 @@ void App::draw_phrase(Draw& d) {
     d.text(COL_X[4], Y0, "FX1", pal::HEADER);
     d.text(COL_X[5], Y0, "FX2", pal::HEADER);
     d.text(COL_X[6], Y0, "FX3", pal::HEADER);
-
-    // phrase length readout (right side of the header). accent when shortened.
-    {
-        const auto& ph = project_.phrases[cur_phrase_];
-        int plen = seq::phrase_len(ph);
-        char lb[12];
-        std::snprintf(lb, sizeof(lb), "LEN %02X", plen);
-        d.text(340, Y0, lb, plen < seq::PHRASE_STEPS ? pal::CURSOR : pal::FG_DIM);
-    }
 
     // playhead: ANY track can be playing the phrase we're looking at - bass on T0,
     // hats on T3 is the norm. scanning only track 0 meant the cursor row you were
@@ -686,11 +1104,12 @@ void App::draw_phrase(Draw& d) {
 
     // which track the playhead follows (a phrase can be shared between tracks) -
     // so the moving bar is never ambiguous. tiny play triangle + track number.
+    // sits at the right edge of the GRID now (the old x=300 is panel territory).
     if (playing_track >= 0) {
-        for (int i = 0; i < 4; ++i) d.rect(300 + i, Y0 + i, 1, 7 - i * 2, pal::PLAY);
+        for (int i = 0; i < 4; ++i) d.rect(GRID_W - 24 + i, Y0 + i, 1, 7 - i * 2, pal::PLAY);
         char tb[6];
         std::snprintf(tb, sizeof(tb), "T%d", playing_track);
-        d.text(306, Y0, tb, pal::PLAY);
+        d.text(GRID_W - 18, Y0, tb, pal::PLAY);
     }
 
     for (int row = 0; row < seq::PHRASE_STEPS; ++row) {
@@ -698,7 +1117,7 @@ void App::draw_phrase(Draw& d) {
         const auto& step = project_.phrases[cur_phrase_].steps[row];
 
         // zebra
-        if (row & 1) d.rect(0, y - 1, 400, ROW_H, pal::BG_HI);
+        if (row & 1) d.rect(0, y - 1, GRID_W, ROW_H, pal::BG_HI);
 
         // playhead trail: current step bright + 2 previous fading out (Forza-style feedback)
         if (playing_step >= 0) {
@@ -707,15 +1126,15 @@ void App::draw_phrase(Draw& d) {
             if (back == 0) {
                 // steady backdrop + a gradient that flows across the row on each
                 // step (breathes with the beat instead of blinking)
-                d.rect(0, y - 1, 400, ROW_H, with_alpha(pal::PLAY, 0x60));
-                beat_glow(d, 0, y - 1, 400, ROW_H, frame_ - step_change_frame_, pal::PLAY);
+                d.rect(0, y - 1, GRID_W, ROW_H, with_alpha(pal::PLAYHEAD_BG, 0xC0));
+                beat_glow(d, 0, y - 1, GRID_W, ROW_H, frame_ - step_change_frame_, pal::PLAYHEAD);
                 // bright markers at the edges of the current step
-                d.rect(0, y - 1, 3, ROW_H, pal::PLAY);
-                d.rect(397, y - 1, 3, ROW_H, pal::PLAY);
+                d.rect(0, y - 1, 3, ROW_H, pal::PLAYHEAD);
+                d.rect(GRID_W - 3, y - 1, 3, ROW_H, pal::PLAYHEAD);
             } else if (back <= 2) {
                 // trail tail: the farther back - the more transparent
                 uint8_t a = (back == 1) ? 0x30 : 0x18;
-                d.rect(0, y - 1, 400, ROW_H, with_alpha(pal::PLAY, a));
+                d.rect(0, y - 1, GRID_W, ROW_H, with_alpha(pal::PLAYHEAD_BG, a));
             }
         }
 
@@ -725,9 +1144,9 @@ void App::draw_phrase(Draw& d) {
             int hi = sel_anchor_ < cursor_row_ ? cursor_row_ : sel_anchor_;
             if (row >= lo && row <= hi) {
                 uint8_t br = breathe_pulse(frame_, 48);
-                d.rect(0, y - 1, 400, ROW_H, with_alpha(pal::CURSOR, (uint8_t)(0x28 + br / 8)));
+                d.rect(0, y - 1, GRID_W, ROW_H, with_alpha(pal::CURSOR, (uint8_t)(0x28 + br / 8)));
                 d.rect(0, y - 1, 2, ROW_H, pal::CURSOR);
-                d.rect(398, y - 1, 2, ROW_H, pal::CURSOR);
+                d.rect(GRID_W - 2, y - 1, 2, ROW_H, pal::CURSOR);
             }
         }
 
@@ -768,8 +1187,8 @@ void App::draw_phrase(Draw& d) {
         {
             int plen = seq::phrase_len(project_.phrases[cur_phrase_]);
             if (row >= plen) {
-                d.rect(0, y - 1, 400, ROW_H, with_alpha(pal::PANEL, 0xA0));
-                if (row == plen) d.rect(0, y - 1, 400, 1, pal::CURSOR);  // end-of-phrase line
+                d.rect(0, y - 1, GRID_W, ROW_H, with_alpha(pal::PANEL, 0xA0));
+                if (row == plen) d.rect(0, y - 1, GRID_W, 1, pal::CURSOR);  // end-of-phrase line
             }
         }
 
@@ -800,39 +1219,16 @@ void App::draw_phrase(Draw& d) {
         }
     }
 
-    // === FX hint bar: typed inspector when the cursor is on an FX cell ===
-    // layout:  [FXn] [MNEMONIC]  <visual widget>  [hexval]
-    // cursor_col_ 3/5/7 = fx cmd of slot 0/1/2; 4/6/8 = its value.
-    if (cursor_col_ >= 3 && cursor_col_ <= 8) {
-        int slot = (cursor_col_ - 3) / 2;
-        const auto& step = project_.phrases[cur_phrase_].steps[cursor_row_];
-        uint8_t cmd = step.fx[slot].cmd;
-        uint8_t val = step.fx[slot].value;
-        const int HY = 228;
+    // Dotted column rules, like the reference: one quiet pixel followed by a
+    // two-pixel gap. Draw last so zebra/playhead fills cannot erase the dots.
+    constexpr int GRID_TOP = Y0 - 2;
+    constexpr int GRID_BOTTOM = Y0 + 12 + seq::PHRASE_STEPS * ROW_H;
+    for (int x : COL_SEP)
+        for (int y = GRID_TOP; y < GRID_BOTTOM; y += 3)
+            d.rect(x, y, 1, 1, pal::GRID);
 
-        // opaque backing bar so the phrase grid underneath doesn't bleed through
-        // (the last step rows reach down to ~y=242 and were colliding with this text).
-        d.rect(0, HY - 2, 400, 14, pal::BG_HI);
-        d.rect(0, HY - 3, 400, 1, pal::HEADER);   // thin ochre separator on top
-
-        // slot label
-        char sl[5];
-        std::snprintf(sl, sizeof(sl), "FX%d", slot + 1);
-        d.text(8, HY, sl, pal::FG_DIM, 1);
-
-        if (cmd == 0) {
-            d.text(34, HY, "---  (A/B pick effect)", pal::FG_DIM, 1);
-        } else {
-            // 3-letter mnemonic, ALL CAPS, accent colour
-            d.text(34, HY, seq::fx_name_short(cmd), pal::HEADER, 1);
-            // typed visual widget in the middle strip
-            draw_fx_widget(d, cmd, val, 64, HY, 56);
-            // raw hex value on the right
-            d.hex2(130, HY, val, pal::FG, 1);
-            // full english name, dim, far right
-            d.text(150, HY, seq::fx_name_long(cmd), pal::FG_DIM, 1);
-        }
-    }
+    // === permanent inspector panel (right third) ===
+    draw_phrase_panel(d, GRID_W);
 }
 void App::draw_chain(Draw& d) {
     constexpr int Y0 = 22;
@@ -1037,16 +1433,16 @@ void App::draw_song(Draw& d) {
                 uint32_t age = frame_ - song_ph_frame_[t];
                 if (age < 24) {
                     uint8_t a = (uint8_t)(150 - age * 150 / 24);
-                    d.rect(cx - 4, y - 1, 30, ROW_H, with_alpha(pal::PLAY_BG, a));
+                    d.rect(cx - 4, y - 1, 30, ROW_H, with_alpha(pal::PLAYHEAD_BG, a));
                 }
             }
             if (!tps.playing || !tps.song_mode_ || (int)tps.song_row != row) continue;
             // cell backdrop + a small gradient flowing through it on each beat
-            d.rect(cx - 4, y - 1, 30, ROW_H, with_alpha(pal::PLAY_BG, 0xC0));
-            beat_glow(d, cx - 4, y - 1, 30, ROW_H, frame_ - step_change_frame_, pal::PLAY, 12);
+            d.rect(cx - 4, y - 1, 30, ROW_H, with_alpha(pal::PLAYHEAD_BG, 0xC0));
+            beat_glow(d, cx - 4, y - 1, 30, ROW_H, frame_ - step_change_frame_, pal::PLAYHEAD, 12);
             // left tick grows as the chain advances (row progress at a glance)
             int th = 2 + (int)tps.play_chain_row * (ROW_H - 2) / (seq::CHAIN_ROWS - 1);
-            d.rect(cx - 4, y - 1, 2, th, pal::PLAY);
+            d.rect(cx - 4, y - 1, 2, th, pal::PLAYHEAD);
         }
 
         d.hex2(8, y, row & 0xFF, pal::FG_DIM);
@@ -1188,16 +1584,16 @@ void App::draw_song_timeline(Draw& d) {
                 uint32_t age = frame_ - song_ph_frame_[t];
                 if (age < 24) {
                     uint8_t a = (uint8_t)(150 - age * 150 / 24);
-                    d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PLAY_BG, a));
+                    d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PLAYHEAD_BG, a));
                 }
             }
             // playhead cell + chain progress bar along the bottom edge
             if (tps.playing && tps.song_mode_ && (int)tps.song_row == row) {
-                d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PLAY_BG, 0xC0));
+                d.rect(x - 2, ly + 1, CELL_W, LANE_H - 2, with_alpha(pal::PLAYHEAD_BG, 0xC0));
                 beat_glow(d, x - 2, ly + 1, CELL_W, LANE_H - 2,
-                          frame_ - step_change_frame_, pal::PLAY, 12);
+                          frame_ - step_change_frame_, pal::PLAYHEAD, 12);
                 int pw = 2 + (int)tps.play_chain_row * (CELL_W - 2) / (seq::CHAIN_ROWS - 1);
-                d.rect(x - 2, ly + LANE_H - 3, pw, 2, pal::PLAY);
+                d.rect(x - 2, ly + LANE_H - 3, pw, 2, pal::PLAYHEAD);
             }
 
             uint8_t ch = project_.song.rows[row].chain[t];

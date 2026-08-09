@@ -26,95 +26,6 @@ void App::update(const InputState& in) {
     // === in-app HELP overlay owns all input while open ===
     if (help_on_) { update_help(in); return; }
 
-    // === LIVE STICK MODULATION (synced with the KAOSS pad) ===
-    // LEFT stick = the kaoss pad on a stick: X/Y drive the same two assigned
-    // destinations (kaoss_dest_x_/y_) and honor the TRK/ALL target toggle.
-    // RIGHT stick keeps a fixed complementary pair: X -> delay+reverb send,
-    // Y (pull down) -> bitcrush+downsample. four performance axes total.
-    // baseline contract (same as kaoss): snapshot the grabbed tracks when a
-    // stick first deflects, ramp back on release - nothing stays stuck.
-    {
-        int trk = song_col_;
-        if (trk < 0) trk = 0;
-        if (trk >= 8) trk = 7;
-        const bool stick_on = (in.lstick_active && stick_sync_) || in.cstick_active;
-
-        if (stick_on && !stick_was_on_) {
-            // gesture start: grab the target track(s) + snapshot baselines
-            stick_track_ = trk;
-            stick_mask_  = kaoss_all_ ? 0xFF : (uint8_t)(1u << trk);
-            for (int t = 0; t < 8; ++t) {
-                if (!(stick_mask_ & (1u << t))) continue;
-                auto& ts = mixer_.track(t);
-                stick_bases_[t] = { ts.cutoff, ts.resonance, ts.send_del, ts.send_rev,
-                                    ts.mg_rate, ts.mix_vol, ts.pan,
-                                    ts.mg_to_cutoff, ts.mg_to_vca, ts.bits, ts.downsample };
-            }
-            stick_release_ = 0;
-        }
-        if (!stick_on && stick_was_on_) {
-            // release: ramp the grabbed tracks back to baseline (in tick())
-            stick_release_ = KAOSS_REL_FRAMES;
-        }
-        stick_was_on_ = stick_on;
-
-        // left stick -> assigned kaoss destinations (0..1000 field coords).
-        // stick_sync_ off = left stick unplugged (kaoss toggle on the pad)
-        if (in.lstick_active && stick_sync_) {
-            int vx = (in.lstick_x + 1000) / 2;   // -1000..1000 -> 0..1000
-            int vy = (in.lstick_y + 1000) / 2;
-            if (vx < 0) vx = 0; if (vx > 1000) vx = 1000;
-            if (vy < 0) vy = 0; if (vy > 1000) vy = 1000;
-            for (int t = 0; t < 8; ++t) {
-                if (!(stick_mask_ & (1u << t))) continue;
-                apply_kaoss_dest(t, (uint8_t)kaoss_dest_x_, vx);
-                apply_kaoss_dest(t, (uint8_t)kaoss_dest_y_, vy);
-            }
-            // mirror onto the kaoss crosshair - pad and stick show one truth
-            kaoss_x_ = vx;
-            kaoss_y_ = vy;
-            dirty = true;
-        }
-        // right stick: X -> delay+reverb send (0..ONE, perceptual x(2-x) curve)
-        if (in.cstick_active) {
-            int v = (in.cstick_x + 1000) * fx::Q15_ONE / 2000;
-            if (v < 0) v = 0; if (v > fx::Q15_ONE) v = fx::Q15_ONE;
-            v = (int)(((int64_t)v * (2 * fx::Q15_ONE - v)) / fx::Q15_ONE);
-            if (v > fx::Q15_ONE) v = fx::Q15_ONE;
-            // right Y -> bitcrush. center/up = clean, down = grittier.
-            // bit-mask crush is only audible below ~8 bits, so spend most travel there.
-            int down = in.cstick_y < 0 ? -in.cstick_y : 0;   // 0..1000 pull-down amount
-            int bits;
-            if (down < 300) {
-                bits = 16 - down * 8 / 300;         // 16 -> 8 over first 30%
-            } else {
-                bits = 8 - (down - 300) * 6 / 700;  // 8 -> 2 over the rest
-            }
-            if (bits < 2) bits = 2; if (bits > 16) bits = 16;
-            uint8_t dsm = (down > 500) ? (uint8_t)(1 + (down - 500) * 4 / 500) : 1;
-            for (int t = 0; t < 8; ++t) {
-                if (!(stick_mask_ & (1u << t))) continue;
-                auto& ts = mixer_.track(t);
-                ts.perf_hold |= audio::TrackState::HOLD_DEL |
-                                audio::TrackState::HOLD_REV |
-                                audio::TrackState::HOLD_BIT;
-                ts.send_del = (fx::q15)v;
-                ts.send_rev = (fx::q15)v;
-                ts.bits = (uint8_t)bits;
-                ts.downsample = dsm;
-            }
-            dirty = true;
-        }
-
-        // mirror state for the on-screen indicator (read in draw_top)
-        auto& ts = mixer_.track(stick_on ? stick_track_ : trk);
-        perf_lstick_on_ = in.lstick_active && stick_sync_;
-        perf_cstick_on_ = in.cstick_active;
-        perf_cutoff_ = (int)ts.cutoff * 100 / fx::Q15_ONE;
-        perf_reso_   = (int)ts.resonance * 100 / fx::Q15_ONE;
-        perf_send_   = (int)ts.send_del * 100 / fx::Q15_ONE;
-        perf_bits_   = ts.bits;
-    }
     // any a/b/x/y press or BPM/groove change = dirty
     if (in.a || in.b || in.x || in.y) dirty = true;
 
@@ -251,10 +162,13 @@ void App::update(const InputState& in) {
     }
 
     // select = preview note under cursor (trigger this instrument).
-    // on FX-cmd columns SELECT opens the FX help picker instead (update_phrase).
+    // on FX-cmd columns SELECT opens the FX help picker instead (update_phrase),
+    // and on the INSTRUMENT column it drills into the instrument editor
+    // (update_phrase) - completing song > chain > phrase > instrument.
     // HOLD-TO-SUSTAIN: the note gates off when SELECT is released, so you can
     // hold a note one-handed while tweaking params (DoubleSprattt request).
     if (in.select_ && screen_ == Screen::Phrase &&
+        cursor_col_ != 1 &&
         cursor_col_ != 3 && cursor_col_ != 5 && cursor_col_ != 7) {
         const auto& step = project_.phrases[cur_phrase_].steps[cursor_row_];
         if (step.note != seq::EMPTY && step.instrument != seq::EMPTY) {
@@ -735,42 +649,6 @@ void App::draw_top(Draw& d) {
         if (fill > 0) d.rect(bx + 1, by + 1, fill, bh - 2, bat_col);
     }
 
-    // === live DSP cluster (replaces the old full-width text overlay) ===
-    // four tiny vertical bars in the header row: CUT RES SND BIT of the
-    // "performance" track (kaoss/stick target = song_col_). always visible as a
-    // dashboard; lights up bright while a gesture is actually modulating.
-    {
-        const bool kaoss_live = (kb_mode_ == KbMode::Kaoss) && (kaoss_active_ || kaoss_release_ > 0);
-        const bool live = perf_lstick_on_ || perf_cstick_on_ || kaoss_live;
-        int trk = kaoss_live ? kaoss_track_
-                : (song_col_ >= 0 && song_col_ < audio::NUM_TRACKS ? song_col_ : 0);
-        const auto& ts = mixer_.track(trk);
-
-        constexpr int CX = 340, CY = 13, BW = 5, BH = 8, GAP = 8;
-        // track tag (highlighted while a gesture is live)
-        char tb[4];
-        std::snprintf(tb, sizeof(tb), "T%d", trk);
-        d.text(CX - 14, CY + 1, tb, live ? pal::CURSOR : pal::FG_DIM, 1);
-
-        struct Bar { int v255; Color c; };   // value 0..255 + accent
-        int cut = (int)ts.cutoff * 255 / fx::Q15_ONE;
-        int res = (int)ts.resonance * 255 / fx::Q15_ONE;
-        int snd = (int)(ts.send_del > ts.send_rev ? ts.send_del : ts.send_rev) * 255 / fx::Q15_ONE;
-        int bit = (16 - ts.bits) * 255 / 14;             // 16bit=0, 2bit=full
-        const Bar bars[4] = {
-            { cut, pal::HEADER }, { res, pal::CURSOR },
-            { snd, pal::PLAY   }, { bit, pal::RECORD },
-        };
-        for (int i = 0; i < 4; ++i) {
-            int x = CX + i * GAP;
-            d.rect(x, CY, BW, BH, pal::BG_HI);                     // well
-            int h = bars[i].v255 * BH / 255;
-            if (h > BH) h = BH;
-            Color c = live ? bars[i].c : lerp_color(pal::BG_HI, bars[i].c, 140);
-            if (h > 0) d.rect(x, CY + BH - h, BW, h, c);
-        }
-    }
-
     // main content
     switch (screen_) {
         case Screen::Phrase:     draw_phrase(d); break;
@@ -915,7 +793,7 @@ void App::draw_bottom(Draw& d) {
         static const H h_l[]      = {{"DPAD","bpm"},{"L/R","prev/next"},{"SEL","scope"}};
         static const H h_l_inst[] = {{"UD","bpm"},{"<>","inst slot"},{"A","clone inst"},{"SEL","scope"}};
         static const H h_r[]     = {{"A","clr cell"},{"B","clr step"},{"UD","groove"},{"LR","swing"}};
-        static const H h_r_phr[] = {{"A","clr cell"},{"B","clr step"},{"Y","clr phr"},{"UD","grv"},{"LR","swg"}};
+        static const H h_r_phr[] = { {"A","cell"}, {"B","step"}, {"X","tools"}, {"Y","phrase"} };
         static const H h_r_tbl[] = {{"A/B","tbl speed"},{"UD","groove"},{"LR","swing"}};
 
         auto draw_hints = [&](int y, const H* h, int n, ui::Color kc, ui::Color vc) {
@@ -931,12 +809,12 @@ void App::draw_bottom(Draw& d) {
         if (mod_zl_ || mod_l_ || mod_r_) {
             // modifier held: show its combo map, bright (this is the live cheat)
             const char* tag = mod_zl_ ? "ZL" : (mod_l_ ? "L" : "R");
-            // R map is contextual: table screen repurposes R+A/B for table speed,
-            // phrase screen adds R+Y = clear whole phrase
+            // phrase adds R+X tools and R+Y phrase clear; global groove/swing
+            // still work, but the four destructive/edit actions get the scarce hint row.
             const H* hr = (screen_ == Screen::Table)  ? h_r_tbl
                         : (screen_ == Screen::Phrase) ? h_r_phr : h_r;
             int   hrn  = (screen_ == Screen::Table)  ? 3
-                        : (screen_ == Screen::Phrase) ? 5 : 4;
+                        : (screen_ == Screen::Phrase) ? 4 : 4;
             const H* hl = (screen_ == Screen::Instrument) ? h_l_inst : h_l;
             int   hln  = (screen_ == Screen::Instrument) ? 4 : 3;
             const H* mh = mod_zl_ ? h_zl : (mod_l_ ? hl : hr);
@@ -1129,13 +1007,17 @@ void App::draw_bottom(Draw& d) {
     //  the Instrument view panels: WAVE / SLICE / LOAD / REC)
 
 
-    // === FX help picker (Phrase view, fx column + SELECT) - replaces the keyboard ===
+    // === Phrase tools / FX help pickers replace the keyboard ===
+    if (screen_ == Screen::Phrase && phrase_tools_on_) {
+        draw_phrase_tools(d);
+        return;
+    }
     if (screen_ == Screen::Phrase && fx_help_) {
         draw_fx_help(d);
         return;
     }
 
-    // === Sampler instrument: KB/WAVE/SLICE/LOAD/REC tab buttons (always shown above the panel) ===
+    // === Sampler instrument: KB/WAVE/SLICE/LOAD/REC tabs ===
     if (screen_ == Screen::Instrument &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
         draw_inst_tabs(d);
@@ -1151,7 +1033,7 @@ void App::draw_bottom(Draw& d) {
         }
     }
 
-    // === bottom panels (Instrument view, Sampler) - selected via inst_panel_ ===
+    // === bottom panels (Instrument view, Sampler) ===
     if (screen_ == Screen::Instrument &&
         project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler &&
         inst_panel_ != InstPanel::Kb) {
@@ -1514,40 +1396,6 @@ void App::tick() {
 
     // KAOSS pad: release ramp + trail dissipation
     kaoss_tick();
-
-    // stick modulation release: ramp the grabbed tracks back to baseline
-    // (mirror of the kaoss release; sticks can grab ALL tracks too)
-    if (!stick_was_on_ && stick_release_ > 0) {
-        const int n = stick_release_;
-        auto step_q15 = [n](fx::q15& v, fx::q15 target) {
-            v = (fx::q15)((int)v + ((int)target - (int)v) / n);
-        };
-        for (int t = 0; t < 8; ++t) {
-            if (!(stick_mask_ & (1u << t))) continue;
-            auto& ts = mixer_.track(t);
-            const auto& base = stick_bases_[t];
-            step_q15(ts.cutoff,    base.cutoff);
-            step_q15(ts.resonance, base.resonance);
-            step_q15(ts.send_del,  base.send_del);
-            step_q15(ts.send_rev,  base.send_rev);
-            step_q15(ts.mg_rate,   base.mg_rate);
-            step_q15(ts.mix_vol,   base.mix_vol);
-            step_q15(ts.pan,       base.pan);
-            ts.mg_to_cutoff = (int16_t)(ts.mg_to_cutoff
-                             + ((int)base.mg_to_cutoff - (int)ts.mg_to_cutoff) / n);
-            ts.mg_to_vca    = (int16_t)(ts.mg_to_vca
-                             + ((int)base.mg_to_vca - (int)ts.mg_to_vca) / n);
-            ts.bits       = (uint8_t)((int)ts.bits + ((int)base.bits - (int)ts.bits) / n);
-            ts.downsample = (uint8_t)((int)ts.downsample
-                             + ((int)base.downsample - (int)ts.downsample) / n);
-        }
-        --stick_release_;
-        if (stick_release_ == 0) {
-            // ramp finished: hand the params back to the sequencer (mirror of kaoss)
-            for (int t = 0; t < 8; ++t)
-                if (stick_mask_ & (1u << t)) mixer_.track(t).perf_hold = 0;
-        }
-    }
 
     // detect playhead step change - for the pulse on each new step.
     // any playing track counts (the header PLAY dot beats on every screen);

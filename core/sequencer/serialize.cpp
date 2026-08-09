@@ -1,5 +1,6 @@
 #include "serialize.h"
 #include "scale.h"
+#include <algorithm>
 #include <cstring>
 #include <cstdio>
 #include <new>

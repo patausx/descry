@@ -20,8 +20,10 @@ namespace pal {
     inline Color FG_DIM   = 0xFF625055;  // dim/empty cells
     inline Color FG_HEX   = 0xFFB4AB8F;  // hex values
     inline Color CURSOR   = 0xFFAC9086;  // cursor (warm accent)
-    inline Color PLAY     = 0xFF718245;  // playhead
-    inline Color PLAY_BG  = 0xFF3A5F3B;  // playhead row backdrop
+    inline Color PLAY     = 0xFF718245;  // motion accent: scopes/meters/modulation
+    inline Color PLAY_BG  = 0xFF3A5F3B;  // generic motion backdrop
+    inline Color PLAYHEAD = 0xFFE0B050;  // sequencer position (theme-specific)
+    inline Color PLAYHEAD_BG = 0xFF59451F; // sequencer position backdrop
     inline Color HEADER   = 0xFF9E805C;  // labels
     inline Color TRACK0   = 0xFFAC9086;
     inline Color TRACK1   = 0xFF718245;

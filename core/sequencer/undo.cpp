@@ -44,6 +44,12 @@ void UndoStack::write_cell(Project& p, EditKind kind, uint16_t a, uint16_t b,
     }
 }
 
+void UndoStack::begin_group() {
+    if (active_group_) return;
+    active_group_ = next_group_++;
+    if (next_group_ == 0) next_group_ = 1;
+}
+
 void UndoStack::record(EditKind kind, uint16_t a, uint16_t b,
                        const EditRecord::Payload& before,
                        const EditRecord::Payload& after,
@@ -55,8 +61,8 @@ void UndoStack::record(EditKind kind, uint16_t a, uint16_t b,
     // (redo_ must be 0 — once you've undone, the next edit starts a fresh branch.)
     if (count_ > 0 && redo_ == 0) {
         EditRecord& last = ring_[prev(head_)];
-        if (last.kind == kind && last.a == a && last.b == b &&
-            frame - last.frame <= coalesce_frames) {
+        if (last.group == active_group_ && last.kind == kind &&
+            last.a == a && last.b == b && frame - last.frame <= coalesce_frames) {
             last.after = after;
             last.frame = frame;
             // If the coalesced result equals the original before, the net edit is nothing:
@@ -69,6 +75,20 @@ void UndoStack::record(EditKind kind, uint16_t a, uint16_t b,
         }
     }
 
+    // If the ring is full and its oldest entry is part of a group, evict that
+    // entire oldest group before writing. Otherwise overwriting one row would
+    // leave a truncated group whose later undo could only restore half a tool.
+    if (count_ == CAP) {
+        const uint16_t oldest_group = ring_[head_].group;
+        if (oldest_group != 0) {
+            int i = head_;
+            do {
+                --count_;
+                i = next(i);
+            } while (count_ > 0 && ring_[i].group == oldest_group);
+        }
+    }
+
     // Fresh record. Pushing invalidates any redo branch.
     EditRecord& rec = ring_[head_];
     rec.kind = kind;
@@ -77,6 +97,7 @@ void UndoStack::record(EditKind kind, uint16_t a, uint16_t b,
     rec.before = before;
     rec.after = after;
     rec.frame = frame;
+    rec.group = active_group_;
 
     head_ = next(head_);
     if (count_ < CAP) ++count_;     // ring overwrites oldest once full
@@ -85,24 +106,30 @@ void UndoStack::record(EditKind kind, uint16_t a, uint16_t b,
 
 bool UndoStack::undo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b) {
     if (count_ == 0) return false;
-    int idx = prev(head_);
-    const EditRecord& rec = ring_[idx];
-    write_cell(p, rec.kind, rec.a, rec.b, rec.before);
-    out_kind = rec.kind; out_a = rec.a; out_b = rec.b;
-    head_ = idx;
-    --count_;
-    ++redo_;
+    const uint16_t group = ring_[prev(head_)].group;
+    do {
+        int idx = prev(head_);
+        const EditRecord& rec = ring_[idx];
+        write_cell(p, rec.kind, rec.a, rec.b, rec.before);
+        out_kind = rec.kind; out_a = rec.a; out_b = rec.b;
+        head_ = idx;
+        --count_;
+        ++redo_;
+    } while (group != 0 && count_ > 0 && ring_[prev(head_)].group == group);
     return true;
 }
 
 bool UndoStack::redo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b) {
     if (redo_ == 0) return false;
-    const EditRecord& rec = ring_[head_];
-    write_cell(p, rec.kind, rec.a, rec.b, rec.after);
-    out_kind = rec.kind; out_a = rec.a; out_b = rec.b;
-    head_ = next(head_);
-    ++count_;
-    --redo_;
+    const uint16_t group = ring_[head_].group;
+    do {
+        const EditRecord& rec = ring_[head_];
+        write_cell(p, rec.kind, rec.a, rec.b, rec.after);
+        out_kind = rec.kind; out_a = rec.a; out_b = rec.b;
+        head_ = next(head_);
+        ++count_;
+        --redo_;
+    } while (group != 0 && redo_ > 0 && ring_[head_].group == group);
     return true;
 }
 

@@ -44,12 +44,10 @@ struct InputState {
     bool held_zl = false;   // ZL held - modifier for copy/paste (ZL+X / ZL+Y)
     bool held_select = false;   // SELECT held - sustains the preview note (gate)
 
-    // === analog sticks (new3ds): left circle pad + right C-stick ===
-    // normalized to -1000..+1000 (after deadzone). 0 = center/at rest.
-    int  lstick_x = 0, lstick_y = 0;   // left circle pad
-    int  cstick_x = 0, cstick_y = 0;   // right C-stick
-    bool lstick_active = false;         // left moved out of deadzone
-    bool cstick_active = false;         // right moved out of deadzone
+    // semantic analog pulses (new3ds), already deadzoned/repeated by the platform:
+    // circle pad moves the current viewport/cursor; C-stick edits its value.
+    int analog_x = 0, analog_y = 0;     // signed cursor steps for this frame
+    int encoder_delta = 0;              // C-stick Y: +/-1, diagonal: +/-16
 };
 
 class App {
@@ -83,6 +81,8 @@ public:
         undo_.clear();
         inst_undo_.clear();
         step_snap_taken_ = false;
+        phrase_tools_on_ = false;
+        sel_mode_ = false;
     }
     // touch-keyboard write mode (issue #5: "REC off still records"):
     // Jam   = preview only, never writes
@@ -133,6 +133,15 @@ private:
     void draw_song_timeline(Draw& d);   // horizontal DAW-style lane view (toggle: ZL+left/right)
     void draw_chain(Draw& d);
     void draw_phrase(Draw& d);
+    // permanent inspector on the right third of the phrase view: instrument
+    // identity (with sticky-column inheritance), its live envelope, and the
+    // three FX slots of the cursor step decoded into words. `px` = grid width.
+    void draw_phrase_panel(Draw& d, int px);
+    // which instrument phrase step `row` actually plays: its own, else the last
+    // one declared ABOVE it (the instrument column is sticky - that's what the
+    // engine does), else the edit instrument. `inherited` reports whether the
+    // answer came from anywhere but the step itself.
+    uint8_t step_instrument_at(int row, bool* inherited = nullptr) const;
     void draw_instrument(Draw& d);
     // M8-style slice editor panel on the bottom screen (Instrument view, Sampler).
     // draws the waveform + chop markers; touch handled via slice_panel_touch.
@@ -246,14 +255,6 @@ private:
     // wavetable, then create/select a Wavsynth instrument that uses it.
     int make_wavetable_from_sample(int sample_slot);
 
-    // === stick live-mod indicator state (set in update, read in draw_top) ===
-    bool perf_lstick_on_ = false;    // left circle pad active this frame
-    bool perf_cstick_on_ = false;    // right C-stick active this frame
-    int  perf_cutoff_ = 0;           // current values being modulated (0..100 for display)
-    int  perf_reso_ = 0;
-    int  perf_send_ = 0;
-    int  perf_bits_ = 16;
-
     // === clipboard for copy/paste (ZL+X copy step, ZL+Y paste) ===
     seq::PhraseStep clipboard_step_;
     bool has_clip_ = false;
@@ -271,6 +272,22 @@ private:
     int  sel_anchor_ = 0;
     seq::PhraseStep clip_block_[seq::PHRASE_STEPS];
     int  clip_block_len_ = 0;
+
+    // === phrase tools (R+X): compact transforms over selection or playable phrase ===
+    enum class PhraseTool : uint8_t {
+        RotateUp = 0, RotateDown, Reverse,
+        TransposeUp, TransposeDown, OctaveUp, OctaveDown,
+        VelocityUp, VelocityDown, RampUp, RampDown,
+        COUNT
+    };
+    bool phrase_tools_on_ = false;
+    int phrase_tool_sel_ = 0;
+    bool phrase_tools_range_ = false;
+    int phrase_tools_lo_ = 0, phrase_tools_hi_ = seq::PHRASE_STEPS - 1;
+    void open_phrase_tools();
+    void apply_phrase_tool(PhraseTool tool);
+    void draw_phrase_tools(Draw& d);
+    bool phrase_tools_touch(int x, int y);
 
     // === FX help view (m8-style command picker) ===
     // active while the phrase cursor sits on an FX-cmd column AND fx_help_ is on
@@ -423,7 +440,7 @@ private:
 
     // === KAOSS pad (XY touch performance controller, dsn-12 heritage) ===
     // the bottom keyboard band becomes an XY field writing into the target
-    // track's mixer DSP (same path as the live stick modulation above).
+    // track's mixer DSP.
     // each axis has an ASSIGNABLE destination picked from a popup menu
     // (tap the X/Y button in the left column -> grid of destinations).
     enum class KaossDest : uint8_t {
@@ -446,9 +463,6 @@ private:
     static const char* kaoss_dest_name(uint8_t dst);   // 3-letter mnemonic
     bool kaoss_active_  = false;    // finger currently on the field
     bool kaoss_all_     = false;    // false = track under cursor, true = ALL 8 tracks
-    bool stick_sync_    = true;     // left stick drives kaoss dests; false = stick inert
-                                    // (center-of-stick != neutral for unipolar dests like DSM,
-                                    // so the user can unplug the stick entirely)
     int  kaoss_x_ = 500;            // 0..1000 normalized field position
     int  kaoss_y_ = 500;
     int  kaoss_track_ = 0;          // track grabbed by the current/last gesture
@@ -479,18 +493,6 @@ private:
     void kaoss_tick();                             // release ramp (from tick())
     void kaoss_snapshot(int trk);                  // capture baseline for one track
 
-    // === live stick modulation baseline (same contract as kaoss) ===
-    // sticks used to write cutoff/sends/bits and leave them there - stuck FX
-    // after any stick twitch. now: snapshot on deflect, ramp back on release.
-    // LEFT stick is SYNCED to the kaoss pad: it drives the same assigned X/Y
-    // destinations and honors the TRK/ALL target toggle. RIGHT stick keeps the
-    // fixed pair (delay+reverb send / bitcrush) - four performance axes total.
-    KaossBase stick_bases_[8]{};
-    uint8_t stick_mask_    = 0;
-    int  stick_track_   = 0;
-    bool stick_was_on_  = false;
-    int  stick_release_ = 0;
-
 public:
     // audio underrun counter (worker starved - written by platform each frame,
     // shown in the fullscreen scope footer for on-device diagnosis)
@@ -500,9 +502,6 @@ public:
 private:
 
     // bottom-screen panel selector for the Instrument view (Sampler type).
-    // KB = touch keyboard; WAVE = waveform + destructive ops (trim/norm/rev/fade);
-    // SLICE = chop editor; LOAD = wav browser; REC = master bounce into the slot.
-    // (m8-style: the sample editor lives inside the instrument, not a separate screen)
     enum class InstPanel : uint8_t { Kb = 0, Wave, Slice, Load, Rec };
     InstPanel inst_panel_ = InstPanel::Kb;
     // DrumKit bottom panel: KB or GEN (procedural drum generator onto the pad
@@ -599,11 +598,11 @@ public:
 
     // === user settings persisted by main (sdmc settings.cfg) ===
     // small POD mirror of the "how I left my instrument" state: theme, octave,
-    // keyboard mode, kaoss axis assignments, stick sync. main snapshots it
+    // keyboard mode and kaoss axis assignments. main snapshots it
     // every frame (memcmp of a few bytes) and writes the file on change.
     struct Settings {
         uint8_t theme = 0, octave = 4, kb_mode = 0;
-        uint8_t kaoss_x = 0, kaoss_y = 1, stick_sync = 1;
+        uint8_t kaoss_x = 0, kaoss_y = 1, reserved = 0; // keep DSC1 layout stable
         uint8_t scope_style = 0;
     };
     Settings get_settings() const {
@@ -611,7 +610,6 @@ public:
         s.theme = (uint8_t)theme_idx; s.octave = (uint8_t)octave_;
         s.kb_mode = (uint8_t)kb_mode_;
         s.kaoss_x = (uint8_t)kaoss_dest_x_; s.kaoss_y = (uint8_t)kaoss_dest_y_;
-        s.stick_sync = stick_sync_ ? 1 : 0;
         s.scope_style = (uint8_t)scope_style_;
         return s;
     }
@@ -621,7 +619,6 @@ public:
         kb_mode_ = s.kb_mode < 3 ? (KbMode)s.kb_mode : KbMode::Keys;
         if (s.kaoss_x < (uint8_t)KaossDest::COUNT) kaoss_dest_x_ = (KaossDest)s.kaoss_x;
         if (s.kaoss_y < (uint8_t)KaossDest::COUNT) kaoss_dest_y_ = (KaossDest)s.kaoss_y;
-        stick_sync_ = s.stick_sync != 0;
         scope_style_ = s.scope_style < SCOPE_STYLES ? s.scope_style : 0;
     }
 private:

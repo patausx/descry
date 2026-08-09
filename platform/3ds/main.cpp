@@ -678,7 +678,6 @@ static void setup_demo() {
 
 // === edge-trigger input with repeat ===
 struct EdgeInput {
-    u32 last_held = 0;
     u32 hold_frames[32] = {0};
 
     static constexpr int REPEAT_DELAY  = 18;
@@ -703,7 +702,25 @@ struct EdgeInput {
             if (held & (1u << b)) hold_frames[b]++;
             else                  hold_frames[b] = 0;
         }
-        last_held = held;
+    }
+};
+
+// Analog controls are semantic, not fake buttons: the circle pad emits cursor
+// pulses with velocity-sensitive repeat, while C-stick Y emits encoder ticks.
+// A direction change fires immediately; holding waits briefly, then accelerates.
+struct AnalogAxisRepeat {
+    int dir = 0;
+    int frames = 0;
+
+    int pulse(int raw, int deadzone = 28) {
+        const int next = raw > deadzone ? 1 : (raw < -deadzone ? -1 : 0);
+        if (!next) { dir = 0; frames = 0; return 0; }
+        if (next != dir) { dir = next; frames = 0; return dir; }
+        ++frames;
+        if (frames < 8) return 0;
+        int mag = raw < 0 ? -raw : raw;
+        int period = mag >= 125 ? 1 : mag >= 90 ? 2 : mag >= 55 ? 4 : 7;
+        return ((frames - 8) % period) == 0 ? dir : 0;
     }
 };
 
@@ -773,7 +790,9 @@ static int save_screenshot() {
 
 int main() {
     gfxInitDefault();
-    irrstInit();   // for the C-stick (right stick on new3ds) - without this irrstCstickRead returns garbage
+    // IRRST only exists for the new3DS C-stick. Keep the result: on old3DS or a
+    // service failure we must leave the encoder neutral, never consume garbage.
+    const bool cstick_ok = R_SUCCEEDED(irrstInit());
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS * 8);  // bitmap font + X-Y scope trail are quad-hungry
     C2D_Prepare();
@@ -837,6 +856,7 @@ int main() {
         C2D_Fini();
         C3D_Fini();
         ptmuExit();
+        if (cstick_ok) irrstExit();
         gfxExit();
         return 1;
     }
@@ -1000,6 +1020,8 @@ int main() {
     int shot_toast = 0;
     int shot_idx   = -1;
 
+    AnalogAxisRepeat circle_x_repeat, circle_y_repeat, cstick_y_repeat;
+
     while (aptMainLoop()) {
         hidScanInput();
         u32 down = hidKeysDown();
@@ -1083,32 +1105,26 @@ int main() {
         prev_l_held = l_held_now;
         prev_r_held = r_held_now;
 
-        // === analog sticks: left circle pad + right C-stick ===
-        // raw values -156..+156. deadzone cuts off center drift.
-        // normalize to -1000..+1000 for easier mapping.
+        // === analog controls ===
+        // Circle pad = accelerated navigation/scrub pulses. C-stick Y = a virtual
+        // value encoder; leaning it sideways while turning selects the coarse
+        // hexadecimal step (16). No analog path writes DSP directly anymore.
         {
-            constexpr int DEADZONE = 20;     // rest threshold (sticks drift near center)
-            constexpr int MAXRAW  = 156;
-            auto norm = [](int raw, int& out) -> bool {
-                if (raw > -DEADZONE && raw < DEADZONE) { out = 0; return false; }
-                // remove deadzone and scale the remainder to 0..1000
-                int sign = raw < 0 ? -1 : 1;
-                int mag  = (raw < 0 ? -raw : raw) - DEADZONE;
-                int span = MAXRAW - DEADZONE;
-                int v = mag * 1000 / (span > 0 ? span : 1);
-                if (v > 1000) v = 1000;
-                out = sign * v;
-                return true;
-            };
-            circlePosition cp, cs;
-            hidCircleRead(&cp);          // left circle pad
-            irrstCstickRead(&cs);        // right C-stick (new3ds)
-            bool lax = norm(cp.dx, in.lstick_x);
-            bool lay = norm(cp.dy, in.lstick_y);
-            bool cax = norm(cs.dx, in.cstick_x);
-            bool cay = norm(cs.dy, in.cstick_y);
-            in.lstick_active = lax || lay;
-            in.cstick_active = cax || cay;
+            circlePosition cp{};
+            circlePosition cs{};
+            hidCircleRead(&cp);
+            if (cstick_ok) irrstCstickRead(&cs);
+
+            in.analog_x = circle_x_repeat.pulse(cp.dx);
+            in.analog_y = circle_y_repeat.pulse(cp.dy);
+            int enc = cstick_y_repeat.pulse(cs.dy, 34);
+            if (enc) in.encoder_delta = enc * ((cs.dx > 55 || cs.dx < -55) ? 16 : 1);
+
+            // modifiers own the hands; suppress analog edits while a chord is held.
+            if (in.held_l || in.held_r || in.held_zl) {
+                in.analog_x = in.analog_y = 0;
+                in.encoder_delta = 0;
+            }
         }
 
         edge.update(held);
@@ -1357,6 +1373,7 @@ int main() {
     C2D_Fini();
     C3D_Fini();
     ptmuExit();
+    if (cstick_ok) irrstExit();
     gfxExit();
     return 0;
 }

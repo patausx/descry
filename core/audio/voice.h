@@ -42,6 +42,12 @@ public:
     virtual int     ui_env_stage(int idx = 0) const { (void)idx; return -1; }
     virtual fx::q15 ui_env_level(int idx = 0) const { (void)idx; return 0; }
 
+    // Live modulation introspection for compact UI scopes. Most voices do not
+    // own an MG; DSN overrides these for MG1/MG2. Single-word reads are safe
+    // under the same one-frame-lag contract as the envelope accessors above.
+    virtual uint32_t ui_mg_phase(int idx = 0) const { (void)idx; return 0; }
+    virtual fx::q15  ui_mg_value(int idx = 0) const { (void)idx; return 0; }
+
     // provenance tag: which project instrument spawned this voice (and its type
     // at spawn time). lets the instrument editor push param edits into voices
     // that are ALREADY sounding (live tweak on a held note). 0xFF = untagged.

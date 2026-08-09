@@ -16,11 +16,10 @@
 namespace trackr::ui {
 
 namespace {
-    // left column: X / Y assign buttons + TRK/ALL target toggle + STK sync toggle
+    // left column: X / Y assign buttons + TRK/ALL target toggle
     constexpr int AX_W = 38;
-    constexpr int AX_H = (KB_H - 36) / 2;             // 32px per assign button
     constexpr int TGT_H = 18;                         // TRK/ALL strip
-    constexpr int STK_H = 18;                         // stick sync strip
+    constexpr int AX_H = (KB_H - TGT_H) / 2;          // 41px per assign button
     // XY field
     constexpr int KF_X = AX_W + 2;                    // 40
     constexpr int KF_Y = KB_Y;
@@ -169,12 +168,6 @@ void App::kaoss_touch(int x, int y, bool is_move) {
 
     // === X / Y assign buttons + toggles (press only) ===
     if (!is_move && x < AX_W && y >= KB_Y) {
-        if (y >= KB_Y + 2 * AX_H + TGT_H) {
-            // STK toggle: plug/unplug the left stick from the kaoss dests
-            stick_sync_ = !stick_sync_;
-            mark_dirty();
-            return;
-        }
         if (y >= KB_Y + 2 * AX_H) {
             // TRK/ALL toggle. mid-gesture switch would orphan baselines - ignore then.
             if (!kaoss_active_) { kaoss_all_ = !kaoss_all_; mark_dirty(); }
@@ -286,13 +279,6 @@ void App::draw_kaoss(Draw& d) {
             ui_button(d, 0, y + 1, AX_W - 2, TGT_H - 2, bg, pal::FG_DIM,
                       kaoss_all_ ? "ALL" : "TRK",
                       kaoss_all_ ? pal::PLAY : pal::FG_HEX, kaoss_all_);
-        }
-        // stick sync toggle: left stick plugged into the kaoss dests or inert
-        {
-            int y = KB_Y + 2 * AX_H + TGT_H;
-            Color bg = stick_sync_ ? pal::PLAY_BG : pal::BG_HI;
-            ui_button(d, 0, y + 1, AX_W - 2, STK_H - 2, bg, pal::FG_DIM,
-                      "STK", stick_sync_ ? pal::PLAY : pal::FG_DIM, stick_sync_);
         }
     }
 

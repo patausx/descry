@@ -40,6 +40,7 @@ struct EditRecord {
         Payload() : step{} {}
     } before, after;
     uint32_t frame = 0;   // app frame when recorded (for coalescing window)
+    uint16_t group = 0;   // nonzero = adjacent records undo/redo as one operation
 };
 
 // Whole-instrument snapshot. Instrument is a POD (union of param structs), so a
@@ -74,6 +75,11 @@ public:
                 const EditRecord::Payload& after,
                 uint32_t frame, uint32_t coalesce_frames = 30);
 
+    // Batch edits (phrase tools): every record between begin/end is undone/redone
+    // together. Nested begin calls are ignored; zero remains the ungrouped sentinel.
+    void begin_group();
+    void end_group() { active_group_ = 0; }
+
     // Undo the most recent edit (writes `before` back). Returns false if nothing to undo.
     // On success, fills out_kind/out_a/out_b so the UI can move the cursor to the change.
     bool undo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b);
@@ -82,7 +88,7 @@ public:
 
     bool can_undo() const { return count_ > 0; }
     bool can_redo() const { return redo_ > 0; }
-    void clear() { head_ = 0; count_ = 0; redo_ = 0; }
+    void clear() { head_ = 0; count_ = 0; redo_ = 0; active_group_ = 0; }
 
 private:
     EditRecord ring_[CAP];
@@ -92,6 +98,8 @@ private:
     int head_ = 0;
     int count_ = 0;
     int redo_ = 0;
+    uint16_t active_group_ = 0;
+    uint16_t next_group_ = 1;
 
     static int prev(int i) { return (i - 1 + CAP) % CAP; }
     static int next(int i) { return (i + 1) % CAP; }

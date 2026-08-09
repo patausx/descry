@@ -58,6 +58,103 @@ inline void ui_button(Draw& d, int x, int y, int w, int h,
     }
 }
 
+// === ADSR curve geometry ===
+// segment widths for a curve drawn into a W-wide box. shared so the popup and
+// the phrase panel agree on where each stage starts - the live dot needs the
+// exact same numbers the curve was drawn with.
+struct EnvGeom { int wa, wd, ws, wr; };
+inline EnvGeom env_geom(int W, uint32_t atk, uint32_t dec, uint32_t rel) {
+    auto seg_w = [](uint32_t tt) -> int {
+        return (int)(5 + (uint64_t)tt * 40 / ((uint64_t)tt + 16000));
+    };
+    EnvGeom g;
+    int wa = seg_w(atk), wd = seg_w(dec), wr = seg_w(rel);
+    g.ws = W / 8; if (g.ws < 6) g.ws = 6;
+    int total = wa + wd + wr;
+    if (total < 1) total = 1;
+    g.wa = wa * (W - g.ws) / total;
+    g.wd = wd * (W - g.ws) / total;
+    g.wr = W - g.ws - g.wa - g.wd;
+    return g;
+}
+
+// === ADSR curve primitive ===
+// linear segments (honest: every EG in the engine is linear) drawn into an
+// arbitrary box. shared by the instrument-view env popup and the phrase-view
+// side panel so there is exactly ONE definition of "what the envelope looks
+// like". `focus` = stage 0..3 to highlight, -1 = none. returns nothing; the
+// caller owns the frame/labels.
+inline void env_curve(Draw& d, int X0, int Yt, int W, int H,
+                      uint32_t atk, uint32_t dec, int32_t sus_q15, uint32_t rel,
+                      int focus, Color hot, Color cold) {
+    const int YB = Yt + H;
+    const EnvGeom g = env_geom(W, atk, dec, rel);
+    const int wa = g.wa, wd = g.wd, ws = g.ws;
+    int ys = YB - (int)((int64_t)(sus_q15 < 0 ? 0 : sus_q15) * H / 32767);
+
+    auto seg = [&](int x0, int y0, int x1, int y1, bool is_hot) {
+        Color c = is_hot ? hot : cold;
+        int n = x1 - x0; if (n < 1) n = 1;
+        int prev = y0;
+        for (int i = 0; i <= n; ++i) {
+            int y = y0 + (y1 - y0) * i / n;
+            int a = y < prev ? y : prev;
+            int b = y < prev ? prev : y;
+            d.rect(x0 + i, a, 1, b - a + 1, c);
+            prev = y;
+        }
+    };
+    const int xa = X0, xd = X0 + wa, xs = xd + wd, xr = xs + ws;
+    seg(xa, YB, xd, Yt,     focus == 0);
+    seg(xd, Yt, xs, ys,     focus == 1);
+    seg(xs, ys, xr, ys,     focus == 2);
+    seg(xr, ys, X0 + W, YB, focus == 3);
+}
+
+// === live envelope dot ===
+// where the sounding voice currently is ON the curve. stage: 1=atk 2=dec 3=sus
+// 4=rel. y comes straight from the level (always exact); x is derived from the
+// level's progress inside the stage. same math as the instrument popup, so the
+// dot can't disagree between the two views.
+inline void env_live_dot(Draw& d, int X0, int Yt, int W, int H,
+                         uint32_t atk, uint32_t dec, int32_t sus_q15, uint32_t rel,
+                         int stage, int32_t level, uint8_t breath) {
+    if (stage < 1 || stage > 4) return;
+    const int YB = Yt + H;
+    const EnvGeom g = env_geom(W, atk, dec, rel);
+    const int xa = X0, xd = X0 + g.wa, xs = xd + g.wd, xr = xs + g.ws;
+    int32_t lv = level; if (lv < 0) lv = 0; if (lv > 32767) lv = 32767;
+    int32_t sus = sus_q15 < 0 ? 0 : sus_q15;
+    int lx;
+    switch (stage) {
+        case 1:   // attack: 0 -> ONE
+            lx = xa + (int)((int64_t)g.wa * lv / 32767);
+            break;
+        case 2: {  // decay: ONE -> sus
+            int32_t span = 32767 - sus;
+            int32_t p = span > 0 ? (32767 - lv) * 100 / span : 100;
+            if (p < 0) p = 0; if (p > 100) p = 100;
+            lx = xd + g.wd * p / 100;
+            break;
+        }
+        case 3:   // sustain shelf: park mid-shelf
+            lx = xs + g.ws / 2;
+            break;
+        default: {  // release: level -> 0 (sustain as the reference height)
+            int32_t ref = sus > 0 ? sus : 32767;
+            int32_t p = 100 - (int32_t)((int64_t)lv * 100 / ref);
+            if (p < 0) p = 0; if (p > 100) p = 100;
+            lx = xr + g.wr * p / 100;
+            break;
+        }
+    }
+    int ly = YB - (int)((int64_t)lv * H / 32767);
+    if (lx < X0) lx = X0; if (lx > X0 + W - 1) lx = X0 + W - 1;
+    if (ly < Yt) ly = Yt; if (ly > YB) ly = YB;
+    d.rect(lx - 2, ly - 2, 5, 5, with_alpha(pal::CURSOR, (uint8_t)(60 + (breath >> 2))));
+    d.rect(lx - 1, ly - 1, 3, 3, pal::FLASH);
+}
+
 // === touch keyboard dimensions (bottom screen) ===
 inline constexpr int KB_X = 0;
 inline constexpr int KB_Y = 140;

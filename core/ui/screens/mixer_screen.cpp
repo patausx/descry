@@ -59,14 +59,21 @@ void App::update_mixer(const InputState& in) {
     if (in.b) delta = -8;
     if (in.x) delta = +32;
     if (in.y) delta = -32;
+    if (in.encoder_delta) delta = in.encoder_delta;
 
     auto& song = project_.song;
 
     // groove zone: A/B = +/-1 tick, X = straight 6, Y = clear slot
     if (mixer_col_ == MX_GROOVE) {
         uint8_t& g = song.groove_steps[mixer_row_];
-        if (in.a) { int v = g + 1; if (v > 12) v = 12; g = (uint8_t)v; dirty = true; }
-        if (in.b) { int v = g - 1; if (v < 0) v = 0; g = (uint8_t)v; dirty = true; }
+        if (in.a || in.b || in.encoder_delta) {
+            int step = in.encoder_delta ? in.encoder_delta : (in.a ? 1 : -1);
+            int v = (int)g + step;
+            if (v < 0) v = 0;
+            if (v > 12) v = 12;
+            g = (uint8_t)v;
+            dirty = true;
+        }
         if (in.x) { g = 6; dirty = true; }
         if (in.y) { g = 0; dirty = true; }
         sync_mixer_from_song();

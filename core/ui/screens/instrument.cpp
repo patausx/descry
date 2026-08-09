@@ -181,7 +181,6 @@ static const char* const kSamplerRowNames[SAMPLER_ROWS] = {
     "LOOP-S", "LOOP-E", "DETUNE", "ATK   ", "REL   ", "TABLE ", "      ",
 };
 
-
 // edit one row of the Sampler instrument (M8-style param list).
 void App::edit_sampler_row(synth::SamplerParams& sp, seq::Instrument& inst, int delta) {
     auto& s = synth::SampleBank::instance().slot(sp.sample_slot);
@@ -438,7 +437,7 @@ void App::draw_slice_panel(Draw& d, int slot) {
             if (v && v->active() && v->current_sample_slot() == slot) {
                 int pos = v->current_frame();
                 if (pos >= 0 && pos < (int)total)
-                    d.rect(f2x((uint32_t)pos), SL_Y - 2, 1, SL_H + 4, pal::FG);
+                    d.rect(f2x((uint32_t)pos), SL_Y - 2, 1, SL_H + 4, pal::PLAYHEAD);
             }
         }
     }
@@ -731,7 +730,7 @@ void App::draw_wave_panel(Draw& d, int slot) {
         if (v && v->active() && v->current_sample_slot() == slot) {
             int pos = v->current_frame();
             if (pos >= 0 && pos < (int)total)
-                d.rect(f2x((uint32_t)pos), WV_Y - 4, 1, WV_H + 8, pal::FG);
+                d.rect(f2x((uint32_t)pos), WV_Y - 4, 1, WV_H + 8, pal::PLAYHEAD);
         }
     }
 
@@ -744,7 +743,7 @@ void App::draw_wave_panel(Draw& d, int slot) {
     std::snprintf(ib, sizeof(ib), "%.2fs  ROOT %s (A/B)  WIN %d-%d%%",
                   total / 32000.0f, rn, spct, spct + lpct > 100 ? 100 : spct + lpct);
     d.text(WV_X, WV_INFO, ib, pal::FG);
-    d.text(WV_X + 210, WV_INFO, "DRAG  X=>WT", pal::FG_DIM);
+    d.text(WV_X + 210, WV_INFO, "CPAD X/Y SCRUB/ZOOM", pal::FG_DIM);
 }
 
 // touch: op buttons row OR drag nearest start/end marker.
@@ -1384,7 +1383,7 @@ bool App::update_fx_section(const InputState& in, seq::Instrument& inst) {
     if (in.b) delta = -1;
     if (in.x) delta = +16;
     if (in.y) delta = -16;
-
+    if (in.encoder_delta) delta = in.encoder_delta;
     if (delta) {
         snapshot_inst();   // FX defaults are part of the Instrument - same history
         switch (inst_fx_col_) {
@@ -1458,14 +1457,43 @@ void App::push_live_inst_params(uint8_t inst_id) {
 }
 
 void App::update_instrument(const InputState& in) {
+    // Circle pad is reserved here for the sampler WAVE panel: direct scrub/zoom.
     auto& inst = project_.instruments[cur_inst_];
     const bool is_drum = (inst.type == seq::InstrumentType::DrumKit);
 
     // LOAD browser owns navigation/actions before the hidden instrument grid can
     // react to the same D-pad press. X previews, A imports, B stops/goes up,
     // Y rescans (R+SELECT is globally consumed by screenshot handling).
-    if (inst.type == seq::InstrumentType::Sampler && inst_panel_ == InstPanel::Load) {
-        load_panel_input(in, inst.sampler.sample_slot);
+    const bool sample_backed = inst.type == seq::InstrumentType::Sampler;
+    if (sample_backed && inst_panel_ == InstPanel::Load) {
+        const int slot = inst.sampler.sample_slot;
+        load_panel_input(in, slot);
+        return;
+    }
+
+    // In WAVE, circle X scrubs the playback window and circle Y zooms it.
+    // Up = zoom in (shorter window), down = zoom out. Values stay normalized,
+    // so this is cheap and deterministic even for very long samples.
+    if (sample_backed && inst_panel_ == InstPanel::Wave &&
+        (in.analog_x || in.analog_y)) {
+        snapshot_inst();
+        int start = inst.sampler.start;
+        int length = inst.sampler.length;
+        constexpr int SCRUB_STEP = fx::Q15_ONE / 128;
+        constexpr int ZOOM_STEP  = fx::Q15_ONE / 64;
+        start += in.analog_x * SCRUB_STEP;
+        length -= in.analog_y * ZOOM_STEP;
+        if (length < 1) length = 1;
+        if (length > fx::Q15_ONE) length = fx::Q15_ONE;
+        if (start < 0) start = 0;
+        int max_start = fx::Q15_ONE - length;
+        if (start > max_start) start = max_start;
+        inst.sampler.start = (fx::q15)start;
+        inst.sampler.length = (fx::q15)length;
+        edit_flash_frame_ = frame_;
+        mark_dirty();
+        push_live_inst_params(cur_inst_);
+        commit_inst();
         return;
     }
 
@@ -1552,6 +1580,7 @@ post_nav:
         if (in.b) delta = -1;
         if (in.x) delta = +16;
         if (in.y) delta = -16;
+        if (in.encoder_delta) delta = in.encoder_delta;
     }
 
     if (delta) {
@@ -1559,6 +1588,7 @@ post_nav:
         // branch below, including preset loads and type switches (which replace
         // all params + the name and were previously irreversible).
         snapshot_inst();
+        mark_dirty();
         if (is_drum && inst_row_ >= 3 && inst_row_ < 19) {
             // edit sample slot for the pad
             int pad = inst_row_ - 3;
@@ -1962,7 +1992,7 @@ void App::draw_instrument(Draw& d) {
         d.text(396 - (int)std::strlen(slot_hint) * 6, Y0 + 12, slot_hint, pal::GRID);
     }
 
-    static const char* type_names[] = {"NONE", "WAVSYN", "SAMPLER", "DRUMKIT", "FMSYN", "DSN"};
+    static const char* type_names[] = {"NONE", "WAVSYN", "SAMPLER", "DRUMKIT", "FMSYN", "DSN", "GRAN"};
     static const char* shape_names[] = {"SINE", "SAW", "SQUAR", "TRI", "NOIS"};
     static const char* note_names[12] = {"C ","C#","D ","D#","E ","F ","F#","G ","G#","A ","A#","B "};
 
@@ -2602,84 +2632,42 @@ void App::draw_env_popup(Draw& d, uint32_t atk, uint32_t dec, fx::q15 sus,
         d.rect(X0 + W * i / 4, Yt, 1, H, with_alpha(pal::GRID, 70));
     d.rect(X0, Yt + H / 2, W, 1, with_alpha(pal::GRID, 50));
 
-    // time -> px, saturating around 1s (32000 frames @32k). min 5px so a zero
-    // attack still reads as a stage.
+    // time -> px, saturating around 1s (32000 frames @32k). the SHAPE itself is
+    // drawn by the shared env_curve primitive (ui_internal.h) - the same one the
+    // phrase side panel uses, so the two views can never drift apart. the
+    // geometry below only re-derives the segment widths for the live dot and
+    // the sustain guide.
     auto seg_w = [](uint32_t tt) -> int {
         return (int)(5 + (uint64_t)tt * 40 / ((uint64_t)tt + 16000));
     };
     int wa = seg_w(atk), wd = seg_w(dec), wr = seg_w(rel);
-    int ws = 16;                                  // sustain shelf: fixed
-    int total = wa + wd + wr + ws;
-    wa = wa * (W - ws) / (total - ws);
-    wd = wd * (W - ws) / (total - ws);
+    int ws = W / 8; if (ws < 6) ws = 6;
+    int total = wa + wd + wr;
+    if (total < 1) total = 1;
+    wa = wa * (W - ws) / total;
+    wd = wd * (W - ws) / total;
     wr = W - ws - wa - wd;
     int ys = YB - (int)((uint64_t)sus * H / fx::Q15_ONE);
 
-    // draw a linear segment as 1px columns connected vertically (no line prim)
-    auto seg = [&](int x0, int y0, int x1, int y1, bool hot) {
-        Color c = hot ? pal::CURSOR : pal::PLAY;
-        int n = x1 - x0; if (n < 1) n = 1;
-        int prev = y0;
-        for (int i = 0; i <= n; ++i) {
-            int x = x0 + i;
-            int y = y0 + (y1 - y0) * i / n;
-            int a = y < prev ? y : prev;
-            int b = y < prev ? prev : y;
-            d.rect(x, a, 1, b - a + 1, c);
-            if (hot && a > Yt) d.rect(x, a - 1, 1, 1, c);   // 2px when focused
-            prev = y;
-        }
-    };
     // sustain level guide (dotted)
     for (int x = X0; x < X0 + W; x += 4)
         d.rect(x, ys, 2, 1, pal::GRID);
 
-    int x = X0;
-    const int xa = x, xd = x + wa, xs = x + wa + wd, xr = x + wa + wd + ws;
-    seg(xa, YB, xd, Yt,     focus == 0);   // attack
-    seg(xd, Yt, xs, ys,     focus == 1);   // decay
-    seg(xs, ys, xr, ys,     focus == 2);   // sustain
-    seg(xr, ys, X0 + W, YB, focus == 3);   // release
+    const int xa = X0, xd = X0 + wa, xs = xd + wd, xr = xs + ws;
+    env_curve(d, X0, Yt, W, H, atk, dec, sus, rel, focus, pal::CURSOR, pal::PLAY);
     // gate-off tick at the sustain/release seam
     d.rect(xr, Yt, 1, H, with_alpha(pal::FG_DIM, 120));
 
     // === LIVE dot: current env position while a note sounds ===
-    // stage: 1=atk 2=dec 3=sus 4=rel. y comes straight from the level (always
-    // exact); x is derived from the level's progress inside the stage.
+    // delegated to the shared helper so the popup and the phrase panel place it
+    // identically; the level tick on the right edge stays popup-only.
     if (live_stage >= 1 && live_stage <= 4) {
+        env_live_dot(d, X0, Yt, W, H, atk, dec, sus, rel,
+                     live_stage, live_level, breathe_pulse(frame_, 24));
         int32_t lv = live_level; if (lv < 0) lv = 0; if (lv > fx::Q15_ONE) lv = fx::Q15_ONE;
-        int lx;
-        switch (live_stage) {
-            case 1:  // attack: 0 -> ONE
-                lx = xa + (int)((int64_t)wa * lv / fx::Q15_ONE);
-                break;
-            case 2: {  // decay: ONE -> sus
-                int32_t span = fx::Q15_ONE - (int32_t)sus;
-                int32_t p = span > 0 ? (fx::Q15_ONE - lv) * 100 / span : 100;
-                if (p < 0) p = 0; if (p > 100) p = 100;
-                lx = xd + wd * p / 100;
-                break;
-            }
-            case 3:  // sustain shelf: park mid-shelf
-                lx = xs + ws / 2;
-                break;
-            default: {  // release: level -> 0 (approx from sustain as reference)
-                int32_t ref = sus > 0 ? sus : fx::Q15_ONE;
-                int32_t p = 100 - (int32_t)((int64_t)lv * 100 / ref);
-                if (p < 0) p = 0; if (p > 100) p = 100;
-                lx = xr + wr * p / 100;
-                break;
-            }
-        }
         int ly = YB - (int)((int64_t)lv * H / fx::Q15_ONE);
-        if (lx < X0) lx = X0; if (lx > X0 + W - 1) lx = X0 + W - 1;
         if (ly < Yt) ly = Yt; if (ly > YB) ly = YB;
-        // glow halo + bright core (breathing slightly)
-        uint8_t br = breathe_pulse(frame_, 24);
-        d.rect(lx - 2, ly - 2, 5, 5, with_alpha(pal::CURSOR, (uint8_t)(60 + (br >> 2))));
-        d.rect(lx - 1, ly - 1, 3, 3, pal::FLASH);
-        // level readout tick on the right edge
-        d.rect(X0 + W + 1, ly, 3, 2, pal::FLASH);
+        d.rect(X0 + W + 1, ly, 3, 2, pal::FLASH);   // level readout tick
     }
 }
 

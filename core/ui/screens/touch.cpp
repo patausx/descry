@@ -25,11 +25,12 @@ void App::touch_release() {
     // finishing a drag in the instrument WAVE panel: loop markers (kinds 3/4)
     // get zero-crossing snapped on release for click-free seams. edge positions
     // (0 / total) are intentional - leave them alone.
-    if (smp_touch_active_ && screen_ == Screen::Instrument &&
-        project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler &&
+    const auto& rel_inst = project_.instruments[cur_inst_];
+    const bool rel_sample_backed = rel_inst.type == seq::InstrumentType::Sampler;
+    if (smp_touch_active_ && screen_ == Screen::Instrument && rel_sample_backed &&
         (smp_drag_kind_ == 3 || smp_drag_kind_ == 4)) {
-        auto& s = synth::SampleBank::instance()
-                      .slot(project_.instruments[cur_inst_].sampler.sample_slot);
+        const int slot = rel_inst.sampler.sample_slot;
+        auto& s = synth::SampleBank::instance().slot(slot);
         if (!s.empty()) {
             if (smp_drag_kind_ == 3 && s.loop_start > 0) {
                 s.loop_start = synth::find_zero_crossing_near(s, s.loop_start);
@@ -54,11 +55,13 @@ void App::touch_move(int x, int y) {
         return;
     }
     // === instrument bottom panels: drag markers (slice chop / wave start-len) ===
-    if (screen_ == Screen::Instrument &&
-        project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
-        int slot = project_.instruments[cur_inst_].sampler.sample_slot;
-        if (inst_panel_ == InstPanel::Slice) { slice_panel_touch(x, y, slot, true); return; }
-        if (inst_panel_ == InstPanel::Wave)  { wave_panel_touch(x, y, slot, true);  return; }
+    if (screen_ == Screen::Instrument) {
+        const auto& inst = project_.instruments[cur_inst_];
+        if (inst.type == seq::InstrumentType::Sampler) {
+            const int slot = inst.sampler.sample_slot;
+            if (inst_panel_ == InstPanel::Slice) { slice_panel_touch(x, y, slot, true); return; }
+            if (inst_panel_ == InstPanel::Wave)  { wave_panel_touch(x, y, slot, true);  return; }
+        }
     }
     // === keyboard glissando: slide a finger across keys to retrigger notes (legato) ===
     // active whenever we're currently holding a keyboard note (set in touch()).
@@ -105,7 +108,12 @@ void App::touch(int x, int y) {
         return;
     }
 
-    // === FX help picker owns the bottom screen while open ===
+    // === Phrase tools / FX help own the bottom screen while open ===
+    if (screen_ == Screen::Phrase && phrase_tools_on_) {
+        if (phrase_tools_touch(x, y)) return;
+        phrase_tools_on_ = false;   // tap outside = cancel
+        return;
+    }
     if (screen_ == Screen::Phrase && fx_help_) {
         if (fx_help_touch(x, y)) return;
         return;   // swallow all touches while the picker is open
@@ -117,10 +125,12 @@ void App::touch(int x, int y) {
     // falling through to the global handlers - otherwise an open panel eats
     // taps on the screen tabs (DoubleSprattt, issue #2).
     constexpr int PANEL_BAND_Y = 90;
+    const auto& touch_inst = project_.instruments[cur_inst_];
+    const bool sample_backed = touch_inst.type == seq::InstrumentType::Sampler;
+    int sample_slot = sample_backed ? touch_inst.sampler.sample_slot : 0;
 
-    // === KB/WAVE/SLICE/LOAD/REC tab buttons (Sampler instrument) - check first ===
-    if (screen_ == Screen::Instrument &&
-        project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
+    // === KB/WAVE/SLICE/LOAD/REC tabs for sample-backed instruments ===
+    if (screen_ == Screen::Instrument && sample_backed) {
         if (inst_tab_touch(x, y)) return;
     }
 
@@ -134,10 +144,10 @@ void App::touch(int x, int y) {
         }
     }
 
-    // === WAV loader panel touch (Instrument/Sampler, toggled on) ===
+    // === WAV loader panel touch (sample-backed instruments) ===
     // tap a row to select it; tap the already-selected row to open/load it.
     if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Load && y >= PANEL_BAND_Y &&
-        project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
+        sample_backed) {
         constexpr int PY = 116, LIST_Y = PY + 16, ROW_H = 11, VISIBLE = 9;
         if (wav_count_ > 0 && y >= LIST_Y && y < LIST_Y + VISIBLE * ROW_H) {
             int top = wav_sel_ - VISIBLE / 2;
@@ -150,7 +160,7 @@ void App::touch(int x, int y) {
                     // second tap on same row = open/load: synthesize an A press
                     InputState fake{};
                     fake.a = true;
-                    load_panel_input(fake, project_.instruments[cur_inst_].sampler.sample_slot);
+                    load_panel_input(fake, sample_slot);
                 } else {
                     wav_sel_ = idx;
                     // Selecting a row is a safe, cheap audition gesture. Folders
@@ -158,7 +168,7 @@ void App::touch(int x, int y) {
                     if (!wav_is_dir_[idx]) {
                         InputState fake{};
                         fake.x = true;
-                        load_panel_input(fake, project_.instruments[cur_inst_].sampler.sample_slot);
+                        load_panel_input(fake, sample_slot);
                     }
                 }
             }
@@ -166,29 +176,29 @@ void App::touch(int x, int y) {
         return;   // never fall through to the keyboard
     }
 
-    // === slice editor panel touch (Instrument/Sampler, toggled on) ===
+    // === slice editor panel touch (Sampler only) ===
     if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Slice && y >= PANEL_BAND_Y &&
-        project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
-        slice_panel_touch(x, y, project_.instruments[cur_inst_].sampler.sample_slot, false);
+        touch_inst.type == seq::InstrumentType::Sampler) {
+        slice_panel_touch(x, y, sample_slot, false);
         smp_touch_active_ = true;   // mark so touch_move drags the chop
         return;
     }
-    // === WAVE panel touch (Instrument/Sampler): markers + op buttons ===
+    // === WAVE panel touch: markers + op buttons ===
     if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Wave && y >= PANEL_BAND_Y &&
-        project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
-        wave_panel_touch(x, y, project_.instruments[cur_inst_].sampler.sample_slot, false);
+        touch_inst.type == seq::InstrumentType::Sampler) {
+        wave_panel_touch(x, y, sample_slot, false);
         smp_touch_active_ = true;   // so touch_move keeps dragging markers
         return;
     }
     // === REC panel touch: big arm/stop button (mirrors ZR resample) ===
     if (screen_ == Screen::Instrument && inst_panel_ == InstPanel::Rec && y >= PANEL_BAND_Y &&
-        project_.instruments[cur_inst_].type == seq::InstrumentType::Sampler) {
+        sample_backed) {
         constexpr int BX = 64, BY = 144, BW = 192, BH = 56;
         if (x >= BX && x < BX + BW && y >= BY && y < BY + BH) {
             constexpr std::size_t MAX_FRAMES = 32000 * 15;
             if (!mixer_.is_resampling()) {
                 const std::size_t avail = synth::SampleBank::instance().bytes_available_replacing(
-                    project_.instruments[cur_inst_].sampler.sample_slot);
+                    sample_slot);
                 const std::size_t budget_frames = avail / (2 * sizeof(fx::q15));
                 if (budget_frames == 0) {
                     std::snprintf(smp_status_, sizeof(smp_status_), "SAMPLE RAM FULL");
@@ -201,7 +211,7 @@ void App::touch(int x, int y) {
                 std::vector<fx::q15> captured;
                 std::size_t frames = 0;
                 if (mixer_.take_resample(captured, frames) && frames > 0) {
-                    int dst_slot = project_.instruments[cur_inst_].sampler.sample_slot;
+                    int dst_slot = sample_slot;
                     synth::Sample completed;
                     completed.data = std::move(captured);
                     std::snprintf(completed.name, sizeof(completed.name), "resample %02d", dst_slot);
@@ -288,7 +298,18 @@ void App::touch(int x, int y) {
             return;
         }
         if (x >= 146 && x < 202) {
-            // KEYS -> PADS -> KAOSS cycle
+            // KEYS -> PADS -> KAOSS cycle.
+            // leaving KAOSS while a gesture is still "held" (the button press
+            // never reaches touch_release for the field) left the grabbed tracks
+            // under perf_hold forever: their cutoff/sends stayed frozen at the
+            // last finger position and note triggers could no longer restore the
+            // instrument defaults - which reads as the app choking after a
+            // switch. treat the mode change as a finger lift and run the normal
+            // release ramp back to baseline.
+            if (kb_mode_ == KbMode::Kaoss && (kaoss_active_ || kaoss_release_ > 0)) {
+                kaoss_active_  = false;
+                kaoss_release_ = KAOSS_REL_FRAMES;
+            }
             kb_mode_ = (KbMode)(((int)kb_mode_ + 1) % 3);
             return;
         }

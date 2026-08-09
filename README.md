@@ -43,6 +43,8 @@ old 3DS is not supported.
 - live mode: quantized chain launch per track, solo pads
 - clone (deep copy) for chains and phrases, undo/redo (including whole-instrument
   history for preset loads), block selection copy/paste
+- Phrase Tools over the whole playable phrase or selected rows: rotate, reverse,
+  transpose, octave shift and velocity shaping, each as one undo operation
 
 **instruments** (all fixed-point, 32 kHz)
 - wavsynth — classic waves with unison/detune, plus user wavetables
@@ -60,8 +62,8 @@ old 3DS is not supported.
 - mixer view with touch faders, meters and peak hold
 - KAOSS-style XY pad: two assignable destinations, per-track or all tracks at
   once, parameters ramp back on release
-- analog sticks mirror the XY pad (left stick = the same assignable pair,
-  right stick = sends/crush); can be toggled off
+- circle pad provides accelerated Song movement and sampler waveform scrub/zoom;
+  C-stick is a velocity-sensitive value encoder with fine/coarse steps
 
 **sampling**
 - record from the built-in mic straight into a sample slot (hold ZR)
@@ -84,6 +86,7 @@ old 3DS is not supported.
 | L + D-pad | BPM · R + ↑↓ groove · R + ←→ swing |
 | ZL + X / Y | copy / paste · ZL + B / A — undo / redo |
 | ZL + SELECT | clone (song/chain) · selection mode (phrase) |
+| R + X | Phrase Tools (whole playable phrase or selected rows) |
 | SELECT | preview note · FX command list (on FX columns) |
 | L + SELECT | fullscreen oscilloscope |
 | R + SELECT | screenshot → SD |

@@ -13,7 +13,8 @@ namespace trackr::ui::pal {
 struct Theme {
     const char* name;
     Color bg, bg_hi, panel, grid, fg, fg_dim, fg_hex, cursor,
-          play, play_bg, header, t0, t1, t2, t3, record, flash;
+          play, play_bg, playhead, playhead_bg, header,
+          t0, t1, t2, t3, record, flash;
 };
 
 static const Theme kThemes[] = {
@@ -21,42 +22,42 @@ static const Theme kThemes[] = {
     { "CRETAC",
       0xFF313432, 0xFF323E42, 0xFF0A0A0E, 0xFF454B4B,
       0xFFBCB7A5, 0xFF625055, 0xFFB4AB8F, 0xFFAC9086,
-      0xFF718245, 0xFF3A5F3B, 0xFF9E805C,
+      0xFF718245, 0xFF3A5F3B, 0xFFE0B050, 0xFF59451F, 0xFF9E805C,
       0xFFAC9086, 0xFF718245, 0xFF9E805C, 0xFF796C64,
       0xFF7C4545, 0xFFBCB7A5 },
     // 1: midnite - m8-style near-black, mint motion, ice-blue cursor
     { "MIDNIT",
       0xFF101216, 0xFF1A1E26, 0xFF060608, 0xFF2A3038,
       0xFFD8DCE0, 0xFF4A5058, 0xFFA8C0B8, 0xFF7EC8E0,
-      0xFF50C878, 0xFF1E4A32, 0xFF8890A0,
+      0xFF50C878, 0xFF1E4A32, 0xFF48D8FF, 0xFF174859, 0xFF8890A0,
       0xFF7EC8E0, 0xFF50C878, 0xFFC8B060, 0xFF9078B0,
       0xFFC04848, 0xFFFFFFFF },
     // 2: ember - amber CRT: warm near-black, amber text, orange cursor
     { "EMBER ",
       0xFF1A1410, 0xFF261C14, 0xFF0C0806, 0xFF3A2E22,
       0xFFE0B060, 0xFF6A5038, 0xFFC09850, 0xFFE87838,
-      0xFFB8D848, 0xFF3A4A1E, 0xFFA07840,
+      0xFFB8D848, 0xFF3A4A1E, 0xFFFF7A24, 0xFF5A2512, 0xFFA07840,
       0xFFE87838, 0xFFB8D848, 0xFFE0B060, 0xFF907050,
       0xFFD04030, 0xFFFFE0A0 },
     // 3: frost - cold slate + ice text, aurora green motion, rose cursor
     { "FROST ",
       0xFF2E3440, 0xFF3B4252, 0xFF14181E, 0xFF4C566A,
       0xFFE5E9F0, 0xFF616E88, 0xFFB8C4D8, 0xFFD08790,
-      0xFFA3BE8C, 0xFF3E5244, 0xFF81A1C1,
+      0xFFA3BE8C, 0xFF3E5244, 0xFF88CFFF, 0xFF29465C, 0xFF81A1C1,
       0xFFD08790, 0xFFA3BE8C, 0xFFEBCB8B, 0xFFB48EAD,
       0xFFBF616A, 0xFFECEFF4 },
     // 4: acid - the brand colorway: olive-black + acid lime motion, amber cursor
     { "ACID  ",
       0xFF14160C, 0xFF1C2010, 0xFF0A0C06, 0xFF32381E,
       0xFFD8E4B0, 0xFF5A6038, 0xFFB8C878, 0xFFE0B050,
-      0xFFC8E030, 0xFF3A4410, 0xFF98A840,
+      0xFFC8E030, 0xFF3A4410, 0xFFD8FF30, 0xFF445514, 0xFF98A840,
       0xFFE0B050, 0xFFC8E030, 0xFF98A840, 0xFF6A7048,
       0xFFD04838, 0xFFF0FFC0 },
     // 5: vapor - synthwave dusk: deep violet, turquoise motion, hot-pink cursor
     { "VAPOR ",
       0xFF16121E, 0xFF201A2E, 0xFF0A0812, 0xFF3A3050,
       0xFFE8DCF0, 0xFF554868, 0xFFC0A8D8, 0xFFFF74A8,
-      0xFF40E0D0, 0xFF1A4A44, 0xFF9080B8,
+      0xFF40E0D0, 0xFF1A4A44, 0xFFFF5CB8, 0xFF5A2048, 0xFF9080B8,
       0xFFFF74A8, 0xFF40E0D0, 0xFFE8C060, 0xFF8878A8,
       0xFFE04848, 0xFFFFFFFF },
 };
@@ -70,7 +71,7 @@ const char* theme_name(int i) {
 ThemeColors theme_colors(int i) {
     if (i < 0 || i >= theme_count()) i = 0;
     const Theme& t = kThemes[i];
-    return { t.bg, t.play, t.cursor, t.fg, t.header };
+    return { t.bg, t.playhead, t.cursor, t.fg, t.header };
 }
 
 void apply_theme(int i) {
@@ -78,7 +79,8 @@ void apply_theme(int i) {
     const Theme& t = kThemes[i];
     BG = t.bg;   BG_HI = t.bg_hi; PANEL = t.panel; GRID = t.grid;
     FG = t.fg;   FG_DIM = t.fg_dim; FG_HEX = t.fg_hex; CURSOR = t.cursor;
-    PLAY = t.play; PLAY_BG = t.play_bg; HEADER = t.header;
+    PLAY = t.play; PLAY_BG = t.play_bg;
+    PLAYHEAD = t.playhead; PLAYHEAD_BG = t.playhead_bg; HEADER = t.header;
     TRACK0 = t.t0; TRACK1 = t.t1; TRACK2 = t.t2; TRACK3 = t.t3;
     RECORD = t.record; FLASH = t.flash;
 }
@@ -95,6 +97,8 @@ void apply_record_tint(uint8_t t) {
     CURSOR  = lerp_color(CURSOR,  0xFFE86850, t);
     PLAY    = lerp_color(PLAY,    0xFFE87840, t);   // motion accent runs hot too
     PLAY_BG = lerp_color(PLAY_BG, 0xFF55201A, t);
+    PLAYHEAD = lerp_color(PLAYHEAD, 0xFFFF8038, t);
+    PLAYHEAD_BG = lerp_color(PLAYHEAD_BG, 0xFF61251A, t);
     FG_HEX  = lerp_color(FG_HEX,  0xFFD8A890, t);
     FG_DIM  = lerp_color(FG_DIM,  0xFF7A4038, t);
     // text stays readable - only warms slightly

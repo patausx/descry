@@ -131,7 +131,7 @@ you are watching (a chain can be used by several tracks at once).
 | --- | --- |
 | A / B | value ±1 (notes walk in-scale when a key is set) |
 | X / Y | value ±12 (notes) / big step |
-| SELECT | on the note column: preview. on an FX cmd column: **FX command list** |
+| SELECT | on the note column: preview. on the **instrument column: open the instrument editor**. on an FX cmd column: **FX command list** |
 | ZL+X / ZL+Y | copy / paste step (or block) |
 | ZL+up/down | phrase length 1..16 |
 | ZL+SELECT | **selection mode** — cursor extends a range; A = copy, X = cut, B = cancel |
@@ -139,11 +139,37 @@ you are watching (a chain can be used by several tracks at once).
 | R+A | clear the cell under the cursor |
 | R+B | clear the whole step |
 | R+Y | clear the entire phrase |
+| R+X | open **Phrase Tools**; uses the active selection, otherwise playable phrase |
 | L+left/right | switch to another phrase slot |
 
+**Phrase Tools:** rotate up/down, reverse, transpose ±1/±12, velocity ±8 and
+velocity ramp up/down. choose with up/down (or C-stick), A applies and B cancels.
+Every transform is a single undo/redo operation.
+
 the playhead follows **whatever track is playing this phrase** — not just track 0
-— and `▶T#` in the header names it. if two tracks share the phrase, the one under
-your song-view cursor wins.
+— and `▶T#` at the right edge of the grid names it. if two tracks share the
+phrase, the one under your song-view cursor wins.
+
+**the side panel.** the right third of the screen is a permanent inspector for
+the step under the cursor, so you never have to leave the view to find out what
+`I05` actually is:
+
+- **instrument** — id, engine type, MONO/POLY and name. if the step's instrument
+  column is empty, the panel resolves it the way the engine does (the last
+  instrument declared above it) and marks the inherited value with `^`.
+  **SELECT on the instrument column opens that instrument's editor.**
+- **source** — what the engine actually plays: the sample slot + name, the
+  wavesynth shape, the FM algorithm, or the DSN oscillator pair.
+- **envelope** — the real ADSR of that instrument, drawn from its own params
+  (FM shows its loudest carrier operator; a DrumKit reports its pad count
+  instead, since its pads are one-shots). a dot rides the curve while a voice of
+  that instrument is actually sounding.
+- **ALWAYS** — the instrument's FX defaults and mod table. these are applied to
+  the track *before* every step's own FX and are otherwise invisible here, which
+  is the usual answer to "why does this instrument sound filtered". only
+  non-default values are listed, so a clean instrument prints nothing.
+- **FX** — all three slots decoded: mnemonic, hex value, the typed widget and
+  the full english name. the slot under the cursor is highlighted.
 
 ### instrument
 
@@ -452,7 +478,6 @@ into the XY pad. the left column has:
 - **X** and **Y** assign buttons — tap to open a popup and pick a destination:
   `CUT · RES · DEL · REV · BIT · DSM · RAT · M>C · M>V · VOL · PAN`
 - **TRK / ALL** — apply to the track under the song cursor, or all 8 at once
-- **STK** — plug/unplug the left stick from the same destinations
 
 drag on the field to perform. a baseline is captured at gesture start; on
 release everything **ramps back** to it — no stuck closed filters. the readout
@@ -463,11 +488,21 @@ stomp them. `CUT`, `RES` and `M>C` auto-engage a lowpass on instruments that
 run filterless, and `M>C` pulls the base cutoff to ~55% so the wobble has
 headroom to swing both ways.
 
-### analog sticks
+### analog controls
 
-the sticks mirror the pad at all times (toggleable via STK):
-**left stick** = the same assignable X/Y pair, honoring TRK/ALL.
-**right stick** = sends/crush.
+analog input is an editing accelerator, not a second performance layer:
+
+- **circle pad** — velocity-sensitive movement in the 256-row Song view. a light
+  deflection steps slowly; a full deflection rapidly scans the arrangement. the
+  d-pad remains the precise one-cell control on every screen.
+- **C-stick up/down** — relative value encoder for the cell/parameter under the
+  cursor. vertical motion edits by ±1; lean the C-stick sideways while moving it
+  vertically for a coarse ±16 step.
+- **sampler WAVE panel** — circle X scrubs the START/LENGTH window and circle Y
+  zooms it (up = in, down = out).
+
+analog input is suppressed while L/R/ZL modifiers are held and is inert in the
+project manager, so drift cannot trigger destructive or file actions.
 
 ### live mode
 

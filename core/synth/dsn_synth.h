@@ -135,6 +135,8 @@ public:
 
     int     ui_env_stage(int idx) const override { return (int)(idx ? eg2_ : eg1_).stage; }
     fx::q15 ui_env_level(int idx) const override { return (idx ? eg2_ : eg1_).q15(); }
+    uint32_t ui_mg_phase(int idx) const override { return (idx ? mg2_ : mg1_).phase; }
+    fx::q15  ui_mg_value(int idx) const override { return idx ? mg2_val_ : mg1_val_; }
 
     DsnSynthParams params;
 
