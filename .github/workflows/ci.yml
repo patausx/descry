@@ -1,0 +1,56 @@
+# descry CI
+#
+# two jobs on purpose, because they answer two different questions and fail
+# for two different reasons:
+#
+#   tests  - does the fixed-point core still behave? plain g++, no toolchain,
+#            seconds. this is the one that catches real regressions.
+#   build  - does it still compile for the console? devkitARM in a container.
+#            catches the ARM-only breakage a host build can never see.
+#
+# the 3dsx is uploaded as an artifact so a build can be pulled onto hardware
+# straight from a PR without anyone building it locally.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: make tests
+        run: make tests
+
+  build:
+    name: 3dsx build
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # the image ships the toolchain but the env vars live in the profile,
+      # and GitHub runs each step in a non-login shell.
+      - name: build
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          export DEVKITARM=/opt/devkitpro/devkitARM
+          export PATH="$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PATH"
+          make -j$(nproc)
+
+      - name: report size
+        run: ls -l descry.3dsx
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: descry-3dsx
+          path: |
+            descry.3dsx
+            descry.smdh
+          if-no-files-found: error
