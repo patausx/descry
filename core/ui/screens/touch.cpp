@@ -89,32 +89,30 @@ void App::touch_move(int x, int y) {
 }
 
 void App::touch(int x, int y) {
-    // any touch marks the project dirty (wrote a note / pressed a button...)
-    // EXCEPT a pure JAM-mode preview - jamming must leave no fingerprints
-    // (otherwise noodling over a song triggers the unsaved-changes confirm).
-    // remembered here, restored at the keyboard fall-through if nothing wrote.
-    bool was_dirty = dirty;
-    dirty = true;
+    // Route touches by semantic action below. Navigation, previews, panels and
+    // independently persisted settings do not change the project.
 
     // === theme picker overlay owns ALL touches while open ===
     if (theme_menu_) {
-        theme_menu_touch(x, y);
+        if (!theme_menu_closing_) theme_menu_touch(x, y);
         return;
     }
 
     // === in-app HELP overlay owns ALL touches while open ===
     if (help_on_) {
-        help_touch(x, y);
+        if (!help_closing_) help_touch(x, y);
         return;
     }
 
     // === Phrase tools / FX help own the bottom screen while open ===
     if (screen_ == Screen::Phrase && phrase_tools_on_) {
+        if (phrase_tools_closing_) return;
         if (phrase_tools_touch(x, y)) return;
-        phrase_tools_on_ = false;   // tap outside = cancel
+        begin_overlay_close(phrase_tools_closing_);   // tap outside = cancel
         return;
     }
     if (screen_ == Screen::Phrase && fx_help_) {
+        if (fx_help_closing_) return;
         if (fx_help_touch(x, y)) return;
         return;   // swallow all touches while the picker is open
     }
@@ -226,7 +224,7 @@ void App::touch(int x, int y) {
                     audio::Mixer::LockGuard _g(mixer_);
                     mixer_.cut_slot_voices(dst_slot);
                     synth::SampleBank::instance().slot(dst_slot) = std::move(completed);
-                    mark_dirty();
+                    mark_project_dirty();
                 }
             }
         }
@@ -238,17 +236,17 @@ void App::touch(int x, int y) {
     // was: root only via ZL+tap -> "it's stuck at C" (discord). discoverability fix.
     if (y < 16 && x >= 244 && x < 310) {
         auto& song = project_.song;
-        if (mod_zl_ || x < 264) song.scale_root = (song.scale_root + 1) % 12;
-        else                    song.scale_type = (song.scale_type + 1) % seq::SCALE_COUNT;
-        mark_dirty();
+        if (mod_zl_ || x < 264) song.scale_root = (uint8_t)wrap_index(song.scale_root, +1, 12);
+        else                    song.scale_type = (uint8_t)wrap_index(song.scale_type, +1, seq::SCALE_COUNT);
+        mark_project_dirty();
         return;
     }
 
     // === theme picker: tap the DESCRY wordmark (top-left, y<16 x<116) ===
     if (y < 16 && x < 116) {
         theme_menu_ = !theme_menu_;
+        theme_menu_closing_ = false;
         theme_menu_frame_ = frame_;
-        mark_dirty();
         return;
     }
 
@@ -258,10 +256,11 @@ void App::touch(int x, int y) {
         tap_last_frame_ = frame_;
         // 60fps: frames-per-beat = 3600/bpm. accept 40..255 bpm (14..90 frames).
         if (delta >= 14 && delta <= 90) {
-            int bpm = (int)(3600 / delta);
-            if (bpm < 40) bpm = 40; if (bpm > 255) bpm = 255;
-            project_.song.bpm = (uint8_t)bpm;
-            mark_dirty();
+            const uint8_t next = (uint8_t)clamp_int((int)(3600 / delta), 40, 255);
+            if (next != project_.song.bpm) {
+                project_.song.bpm = next;
+                mark_project_dirty();
+            }
         }
         return;
     }
@@ -269,9 +268,7 @@ void App::touch(int x, int y) {
     // === screen tabs (y28..43): tap to jump to a view ===
     if (y >= 28 && y < 43) {
         constexpr int NT = (int)Screen::NUM;
-        int idx = (x - 2) * NT / 316;
-        if (idx < 0) idx = 0;
-        if (idx >= NT) idx = NT - 1;
+        int idx = clamp_int((x - 2) * NT / 316, 0, NT - 1);
         if ((Screen)idx != screen_) {
             nav_dir_ = (idx > (int)screen_) ? +1 : -1;
             prev_screen_ = (uint8_t)screen_;
@@ -310,7 +307,7 @@ void App::touch(int x, int y) {
                 kaoss_active_  = false;
                 kaoss_release_ = KAOSS_REL_FRAMES;
             }
-            kb_mode_ = (KbMode)(((int)kb_mode_ + 1) % 3);
+            kb_mode_ = (KbMode)wrap_index((int)kb_mode_, +1, 3);
             return;
         }
         if (x >= 208 && x < 258) {
@@ -318,7 +315,7 @@ void App::touch(int x, int y) {
             // cursor) -> LIVE (record onto the playing step). issue #5: keys
             // used to always write in the phrase view - now JAM is the default
             // and writing is an explicit mode choice.
-            rec_mode_ = (RecMode)(((int)rec_mode_ + 1) % 3);
+            rec_mode_ = (RecMode)wrap_index((int)rec_mode_, +1, 3);
             // LIVE records notes you PLAY - so if the drumkit GEN panel is
             // open (no playable surface), flip back to the pads first
             // (gearmo: "tapping REC in GEN mode has no effect").
@@ -340,7 +337,6 @@ void App::touch(int x, int y) {
                         int rs = player_.track_state(t).play_step;
                         snapshot_step(rs); clear_step(rs); commit_step(rs);
                         edit_flash_frame_ = frame_;
-                        mark_dirty();
                         return;
                     }
                 }
@@ -349,8 +345,7 @@ void App::touch(int x, int y) {
                 snapshot_step(cursor_row_); clear_step(cursor_row_); commit_step(cursor_row_);
                 edit_flash_frame_ = frame_;
                 // advance like a write does - tap tap tap erases a run
-                cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
-                mark_dirty();
+                cursor_row_ = wrap_index(cursor_row_, +1, seq::PHRASE_STEPS);
             }
             return;
         }
@@ -396,7 +391,6 @@ void App::touch(int x, int y) {
                 if (m) mixer_.note_off_all(t);
             }
         }
-        mark_dirty();
         return;
     }
 
@@ -433,10 +427,12 @@ void App::touch(int x, int y) {
             // write to the step that is SOUNDING right now (play_step, not step-1:
             // the old arithmetic wrapped to 15 on every phrase boundary)
             int rec_step = player_.track_state(rec_track).play_step;
+            snapshot_step(rec_step);
             auto& step = project_.phrases[cur_phrase_].steps[rec_step];
             step.note = (uint8_t)note;
             step.instrument = cur_inst_;
             step.velocity = (uint8_t)touch_vel_;
+            commit_step(rec_step);
             last_note_entered_ = note;   // sticky entry follows live rec too
             // preview the note on the selected track (overrides the current note)
             seq::Player::apply_inst_fx_defaults(project_.instruments[cur_inst_], mixer_.track(rec_track));
@@ -455,16 +451,13 @@ void App::touch(int x, int y) {
         step.instrument = cur_inst_;
         step.velocity = (uint8_t)touch_vel_;
         commit_step(cursor_row_);
-        was_dirty = true;   // a real write - keep the dirty flag through the preview
         last_note_entered_ = note;   // sticky entry follows the touch keyboard
-        cursor_row_ = (cursor_row_ + 1) % seq::PHRASE_STEPS;
+        cursor_row_ = wrap_index(cursor_row_, +1, seq::PHRASE_STEPS);
     }
 
     // preview the instrument (in non-rec mode or in any view except phrase).
     // apply the instrument's FX defaults to track 0 first - so the preview goes
     // through the same filter/sends/crush as a sequenced note (WYSIWYG).
-    // a preview alone doesn't change the project - restore the dirty flag.
-    dirty = was_dirty;
     seq::Player::apply_inst_fx_defaults(project_.instruments[cur_inst_], mixer_.track(0));
     mixer_.start_voice(0, project_.make_voice(cur_inst_), note, touch_vel_);
 }
@@ -513,7 +506,7 @@ int App::touch_velocity(int x, int y) const {
         if (y < KB_Y) return 110;
         v = 24 + (y - KB_Y) * (127 - 24) / (KB_H - 1);
     }
-    if (v < 1) v = 1; if (v > 127) v = 127;
+    v = clamp_int(v, 1, 127);
     return v;
 }
 

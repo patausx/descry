@@ -22,8 +22,7 @@ namespace trackr::ui {
 
 // helper shared by all TYPE rows: change instrument type + reinit the union.
 static void set_inst_type(seq::Instrument& inst, int t) {
-    if (t < 0) t = 0;
-    if (t > seq::INSTRUMENT_TYPE_COUNT - 1) t = seq::INSTRUMENT_TYPE_COUNT - 1;
+    t = clamp_int(t, 0, seq::INSTRUMENT_TYPE_COUNT - 1);
     if ((seq::InstrumentType)t == inst.type) return;
     inst.type = (seq::InstrumentType)t;
     switch (inst.type) {
@@ -69,103 +68,60 @@ static const char* const kDsnRowNames[DSN_ROWS] = {
 void App::edit_dsn_row(synth::DsnSynthParams& dp, seq::Instrument& inst, int delta) {
     const int32_t Q = fx::Q15_ONE;
     const int32_t STEP = Q / 32;              // ~3% per tick
-    auto clampq = [](int v) { if (v < 0) v = 0; if (v > fx::Q15_ONE) v = fx::Q15_ONE; return (fx::q15)v; };
-    auto clamps = [](int v) { if (v < -fx::Q15_ONE) v = -fx::Q15_ONE; if (v > fx::Q15_ONE) v = fx::Q15_ONE; return (int16_t)v; };
     switch (inst_row_) {
         case DR_TYPE:
             set_inst_type(inst, (int)inst.type + delta);
             inst_row_ = 0;
             break;
         case DR_PRESET: {
-            int p = dsn_preset_idx_ + delta;
-            while (p < 0) p += synth::DSN_PRESET_COUNT;
-            p %= synth::DSN_PRESET_COUNT;
+            int p = wrap_index(dsn_preset_idx_, delta, synth::DSN_PRESET_COUNT);
             dsn_preset_idx_ = p;
             synth::dsn_load_preset(dp, (synth::DsnPreset)p);
             std::snprintf(inst.name, sizeof(inst.name), "%s",
                           synth::dsn_preset_name((synth::DsnPreset)p));
             break;
         }
-        case DR_OCT: {
-            int v = dp.octave + (delta > 0 ? 1 : -1);
-            if (v < -2) v = -2; if (v > 2) v = 2;
-            dp.octave = (int8_t)v;
+        case DR_OCT:      bump_clamped(dp.octave, delta > 0 ? 1 : -1, -2, 2); break;
+        case DR_VCO1_WAVE:
+            dp.vco1_wave = (synth::DsnWave)wrap_index((int)dp.vco1_wave, delta > 0 ? 1 : -1, 5);
             break;
-        }
-        case DR_VCO1_WAVE: {
-            int v = (int)dp.vco1_wave + (delta > 0 ? 1 : -1);
-            if (v < 0) v = 4; if (v > 4) v = 0;
-            dp.vco1_wave = (synth::DsnWave)v;
+        case DR_VCO1_PW:  bump_clamped(dp.vco1_pw, delta * STEP, 0, Q); break;
+        case DR_VCO2_WAVE:
+            dp.vco2_wave = (synth::DsnWave)wrap_index((int)dp.vco2_wave, delta > 0 ? 1 : -1, 5);
             break;
-        }
-        case DR_VCO1_PW:  dp.vco1_pw = clampq((int)dp.vco1_pw + delta * STEP); break;
-        case DR_VCO2_WAVE: {
-            int v = (int)dp.vco2_wave + (delta > 0 ? 1 : -1);
-            if (v < 0) v = 4; if (v > 4) v = 0;
-            dp.vco2_wave = (synth::DsnWave)v;
-            break;
-        }
-        case DR_VCO2_SEMI: {
-            int v = dp.vco2_semi + (delta > 0 ? 1 : -1);
-            if (v < -24) v = -24; if (v > 24) v = 24;
-            dp.vco2_semi = (int8_t)v;
-            break;
-        }
-        case DR_VCO2_DET: {
-            int v = dp.vco2_detune + (delta > 0 ? 1 : -1);
-            if (v < -50) v = -50; if (v > 50) v = 50;
-            dp.vco2_detune = (int8_t)v;
-            break;
-        }
+        case DR_VCO2_SEMI: bump_clamped(dp.vco2_semi, delta > 0 ? 1 : -1, -24, 24); break;
+        case DR_VCO2_DET:  bump_clamped(dp.vco2_detune, delta > 0 ? 1 : -1, -50, 50); break;
         case DR_SYNC:    dp.vco2_sync = dp.vco2_sync ? 0 : 1; break;
-        case DR_BALANCE: dp.balance = clampq((int)dp.balance + delta * STEP); break;
-        case DR_CUTOFF:  dp.cutoff  = clampq((int)dp.cutoff + delta * STEP); break;
-        case DR_RES:     dp.resonance = clampq((int)dp.resonance + delta * STEP); break;
-        case DR_FILT_TYPE: {
-            int v = (int)dp.vcf_type + (delta > 0 ? 1 : -1);
-            if (v < 0) v = 4; if (v > 4) v = 0;
-            dp.vcf_type = (uint8_t)v;
+        case DR_BALANCE: bump_clamped(dp.balance, delta * STEP, 0, Q); break;
+        case DR_CUTOFF:  bump_clamped(dp.cutoff, delta * STEP, 0, Q); break;
+        case DR_RES:     bump_clamped(dp.resonance, delta * STEP, 0, Q); break;
+        case DR_FILT_TYPE:
+            dp.vcf_type = (uint8_t)wrap_index(dp.vcf_type, delta > 0 ? 1 : -1, 5);
             break;
-        }
-        case DR_PORTA: {
-            int v = dp.portamento + delta;
-            if (v < 0) v = 0; if (v > 127) v = 127;
-            dp.portamento = (uint8_t)v;
-            break;
-        }
+        case DR_PORTA: bump_clamped(dp.portamento, delta, 0, 127); break;
         case DR_EG1_A: { int v = (int)dp.eg1_attack  + delta * 100; if (v < 0) v = 0; dp.eg1_attack  = (uint32_t)v; break; }
         case DR_EG1_D: { int v = (int)dp.eg1_decay   + delta * 200; if (v < 0) v = 0; dp.eg1_decay   = (uint32_t)v; break; }
-        case DR_EG1_S: dp.eg1_sustain = clampq((int)dp.eg1_sustain + delta * STEP); break;
+        case DR_EG1_S:   bump_clamped(dp.eg1_sustain, delta * STEP, 0, Q); break;
         case DR_EG1_R: { int v = (int)dp.eg1_release + delta * 200; if (v < 0) v = 0; dp.eg1_release = (uint32_t)v; break; }
-        case DR_EG1_PIT: dp.eg1_to_pitch  = clamps((int)dp.eg1_to_pitch  + delta * STEP); break;
-        case DR_EG1_CUT: dp.eg1_to_cutoff = clamps((int)dp.eg1_to_cutoff + delta * STEP); break;
+        case DR_EG1_PIT: bump_clamped(dp.eg1_to_pitch, delta * STEP, -Q, Q); break;
+        case DR_EG1_CUT: bump_clamped(dp.eg1_to_cutoff, delta * STEP, -Q, Q); break;
         case DR_EG2_A: { int v = (int)dp.eg2_attack  + delta * 100; if (v < 0) v = 0; dp.eg2_attack  = (uint32_t)v; break; }
         case DR_EG2_D: { int v = (int)dp.eg2_decay   + delta * 200; if (v < 0) v = 0; dp.eg2_decay   = (uint32_t)v; break; }
-        case DR_EG2_S: dp.eg2_sustain = clampq((int)dp.eg2_sustain + delta * STEP); break;
+        case DR_EG2_S:   bump_clamped(dp.eg2_sustain, delta * STEP, 0, Q); break;
         case DR_EG2_R: { int v = (int)dp.eg2_release + delta * 200; if (v < 0) v = 0; dp.eg2_release = (uint32_t)v; break; }
-        case DR_EG2_PIT: dp.eg2_to_pitch  = clamps((int)dp.eg2_to_pitch  + delta * STEP); break;
-        case DR_EG2_CUT: dp.eg2_to_cutoff = clamps((int)dp.eg2_to_cutoff + delta * STEP); break;
-        case DR_MG1_WAVE: {
-            int v = (int)dp.mg1_wave + (delta > 0 ? 1 : -1);
-            if (v < 0) v = 3; if (v > 3) v = 0;
-            dp.mg1_wave = (uint8_t)v;
-            break;
-        }
-        case DR_MG1_RATE: dp.mg1_rate = clampq((int)dp.mg1_rate + delta * STEP); break;
-        case DR_MG1_PIT:  dp.mg1_to_pitch  = clamps((int)dp.mg1_to_pitch  + delta * STEP); break;
-        case DR_MG1_CUT:  dp.mg1_to_cutoff = clamps((int)dp.mg1_to_cutoff + delta * STEP); break;
-        case DR_MG2_WAVE: {
-            int v = (int)dp.mg2_wave + (delta > 0 ? 1 : -1);
-            if (v < 0) v = 3; if (v > 3) v = 0;
-            dp.mg2_wave = (uint8_t)v;
-            break;
-        }
-        case DR_MG2_RATE: dp.mg2_rate = clampq((int)dp.mg2_rate + delta * STEP); break;
-        case DR_MG2_PW:   dp.mg2_to_pw  = clamps((int)dp.mg2_to_pw  + delta * STEP); break;
-        case DR_MG2_VCA:  dp.mg2_to_vca = clamps((int)dp.mg2_to_vca + delta * STEP); break;
+        case DR_EG2_PIT: bump_clamped(dp.eg2_to_pitch, delta * STEP, -Q, Q); break;
+        case DR_EG2_CUT: bump_clamped(dp.eg2_to_cutoff, delta * STEP, -Q, Q); break;
+        case DR_MG1_WAVE: dp.mg1_wave = (uint8_t)wrap_index(dp.mg1_wave, delta > 0 ? 1 : -1, 4); break;
+        case DR_MG1_RATE: bump_clamped(dp.mg1_rate, delta * STEP, 0, Q); break;
+        case DR_MG1_PIT:  bump_clamped(dp.mg1_to_pitch, delta * STEP, -Q, Q); break;
+        case DR_MG1_CUT:  bump_clamped(dp.mg1_to_cutoff, delta * STEP, -Q, Q); break;
+        case DR_MG2_WAVE: dp.mg2_wave = (uint8_t)wrap_index(dp.mg2_wave, delta > 0 ? 1 : -1, 4); break;
+        case DR_MG2_RATE: bump_clamped(dp.mg2_rate, delta * STEP, 0, Q); break;
+        case DR_MG2_PW:   bump_clamped(dp.mg2_to_pw, delta * STEP, -Q, Q); break;
+        case DR_MG2_VCA:  bump_clamped(dp.mg2_to_vca, delta * STEP, -Q, Q); break;
         case DR_VCA_MODE: dp.vca_mode = dp.vca_mode ? 0 : 1; break;
-        case DR_VCA_LVL:  dp.vca_level = clampq((int)dp.vca_level + delta * STEP); break;
-        case DR_DRIVE:    dp.drive = clampq((int)dp.drive + delta * STEP); break;
+        case DR_VCA_LVL: bump_clamped(dp.vca_level, delta * STEP, 0, Q); break;
+        case DR_DRIVE:   bump_clamped(dp.drive, delta * STEP, 0, Q); break;
     }
 }
 
@@ -193,21 +149,14 @@ void App::edit_sampler_row(synth::SamplerParams& sp, seq::Instrument& inst, int 
             break;
         }
         case SR_SAMPLE: {
-            int v = sp.sample_slot + delta;
-            if (v < 0) v = 0;
-            if (v >= synth::SAMPLE_BANK_SIZE) v = synth::SAMPLE_BANK_SIZE - 1;
-            sp.sample_slot = v;
-            cur_sample_ = (uint8_t)v;
+            bump_clamped(sp.sample_slot, delta, 0, synth::SAMPLE_BANK_SIZE - 1);
+            cur_sample_ = (uint8_t)sp.sample_slot;
             break;
         }
-        case SR_PLAY: {
-            int v = (int)sp.play_mode + (delta > 0 ? 1 : (delta < 0 ? -1 : 0));
-            int n = (int)synth::PlayMode::Count;
-            if (v < 0) v = n - 1;
-            if (v >= n) v = 0;
-            sp.play_mode = (synth::PlayMode)v;
+        case SR_PLAY:
+            sp.play_mode = (synth::PlayMode)wrap_index((int)sp.play_mode,
+                delta > 0 ? 1 : (delta < 0 ? -1 : 0), (int)synth::PlayMode::Count);
             break;
-        }
         case SR_SLICE: {
             // 0 = whole / chromatic toggle at the top; 1..MAX = fixed slice
             int v = (int)sp.slice + (delta > 0 ? 1 : (delta < 0 ? -1 : 0));
@@ -216,52 +165,18 @@ void App::edit_sampler_row(synth::SamplerParams& sp, seq::Instrument& inst, int 
             sp.slice = (uint8_t)v;
             break;
         }
-        case SR_SYNC: {
+        case SR_SYNC:
             // 0 = OFF (play at root pitch), 1..8 = "the sample is N bars long",
             // repitched to fit N bars at the project tempo
-            int v = (int)sp.sync_bars + (delta > 0 ? 1 : (delta < 0 ? -1 : 0));
-            if (v < 0) v = 0;
-            if (v > 8) v = 8;
-            sp.sync_bars = (uint8_t)v;
+            bump_clamped(sp.sync_bars, delta > 0 ? 1 : (delta < 0 ? -1 : 0), 0, 8);
             break;
-        }
         case SR_PAD:
             break;
-        case SR_START: {
-            int v = (int)sp.start + delta * STEP;
-            if (v < 0) v = 0;
-            if (v > Q) v = Q;
-            sp.start = (fx::q15)v;
-            break;
-        }
-        case SR_LENGTH: {
-            int v = (int)sp.length + delta * STEP;
-            if (v < 0) v = 0;
-            if (v > Q) v = Q;
-            sp.length = (fx::q15)v;
-            break;
-        }
-        case SR_LOOP_S: {
-            int v = (int)s.loop_start + delta * 64;
-            if (v < 0) v = 0;
-            if (v > (int)s.num_frames()) v = s.num_frames();
-            s.loop_start = (uint32_t)v;
-            break;
-        }
-        case SR_LOOP_E: {
-            int v = (int)s.loop_end + delta * 64;
-            if (v < 0) v = 0;
-            if (v > (int)s.num_frames()) v = s.num_frames();
-            s.loop_end = (uint32_t)v;
-            break;
-        }
-        case SR_DETUNE: {
-            int v = (int)sp.fine_cents + delta;
-            if (v < -50) v = -50;
-            if (v >  50) v =  50;
-            sp.fine_cents = (int8_t)v;
-            break;
-        }
+        case SR_START:  bump_clamped(sp.start, delta * STEP, 0, Q); break;
+        case SR_LENGTH: bump_clamped(sp.length, delta * STEP, 0, Q); break;
+        case SR_LOOP_S: bump_clamped(s.loop_start, delta * 64, 0, (int)s.num_frames()); break;
+        case SR_LOOP_E: bump_clamped(s.loop_end, delta * 64, 0, (int)s.num_frames()); break;
+        case SR_DETUNE: bump_clamped(sp.fine_cents, delta, -50, 50); break;
         case SR_ATTACK: {
             int v = (int)sp.attack + delta * 100;
             if (v < 0) v = 0;
@@ -275,9 +190,7 @@ void App::edit_sampler_row(synth::SamplerParams& sp, seq::Instrument& inst, int 
             break;
         }
         case SR_TABLE: {
-            int v = (int)inst.table_id + delta;
-            if (v < -1) v = -1;
-            if (v >= seq::MAX_TABLES) v = seq::MAX_TABLES - 1;
+            int v = clamp_int((int)inst.table_id + delta, -1, seq::MAX_TABLES - 1);
             inst.table_id = (v < 0) ? seq::EMPTY : (uint8_t)v;
             break;
         }
@@ -396,6 +309,21 @@ void App::draw_slice_panel(Draw& d, int slot) {
             d.rect(SL_X + x, yt, 1, yb - yt + 1, pal::PLAY_BG);
         }
 
+        // operation sweep over the waveform: rebuild moves left->right, delete/rev
+        // contracts toward the selected marker. It is purely a pair of lines.
+        if (sample_motion_frame_ && frame_ - sample_motion_frame_ < 14) {
+            uint32_t age = frame_ - sample_motion_frame_;
+            uint8_t mt = motion_out(age, 14);
+            if (sample_motion_kind_ == 2) {
+                int sx = SL_X + (int)mt * SL_W / 255;
+                d.rect(sx, SL_Y, 2, SL_H, with_alpha(pal::FLASH, (uint8_t)(220 - age * 12)));
+            } else {
+                int half = (int)mt * (SL_W / 2) / 255;
+                d.rect(SL_X + half, SL_Y, 1, SL_H, pal::CURSOR);
+                d.rect(SL_X + SL_W - 1 - half, SL_Y, 1, SL_H, pal::CURSOR);
+            }
+        }
+
         // chop markers: numbered TAB at the top (sorted order = the note/step
         // that plays it via >PHR) + full-height post.
         for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) {
@@ -464,12 +392,15 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
     if (!is_move && y >= SLB_Y && y < SLB_Y + SLB_H) {
         int i = (x - SL_X) / SLB_W;
         if (i < 0 || i > 7 || s.empty()) return;
+        const uint32_t before_rev = s.slice_rev_mask;
+        uint32_t before_chops[synth::Sample::MAX_CHOPS];
+        std::memcpy(before_chops, s.chops, sizeof(before_chops));
         switch (i) {
             case 0: {  // TRNS: transient auto-chop, press again = next sensitivity
                 int n = synth::sample_auto_slice_transients(s, kSensVals[smp_auto_sens_ % 3]);
                 std::snprintf(smp_status_, sizeof(smp_status_), "TRNS %s: %d CHOPS",
                               kSensNames[smp_auto_sens_ % 3], n);
-                smp_auto_sens_ = (smp_auto_sens_ + 1) % 3;
+                smp_auto_sens_ = wrap_index(smp_auto_sens_, +1, 3);
                 smp_chop_sel_ = 0;
                 s.slice_rev_mask = 0;   // ranks changed - stale flags would hit wrong slices
                 break;
@@ -559,7 +490,13 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
                 shuffle_phrase_steps();
                 break;
         }
-        mark_dirty();
+        const bool sample_changed = before_rev != s.slice_rev_mask ||
+            std::memcmp(before_chops, s.chops, sizeof(before_chops)) != 0;
+        if (sample_changed) {
+            mark_project_dirty();
+            sample_motion_kind_ = (i <= 1 || i == 4) ? 2 : 3;
+            sample_motion_frame_ = frame_;
+        }
         return;
     }
 
@@ -582,7 +519,7 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
             smp_chop_sel_ >= 0 && smp_chop_sel_ < synth::Sample::MAX_CHOPS &&
             s.chops[smp_chop_sel_] != 0xFFFFFFFFu) {
             s.chops[smp_chop_sel_] = synth::find_zero_crossing_near(s, frame);
-            mark_dirty();
+            mark_project_dirty();
         }
         return;
     }
@@ -702,6 +639,18 @@ void App::draw_wave_panel(Draw& d, int slot) {
         d.rect(WV_X + x, yt, 1, yb - yt + 1, inside ? pal::PLAY : pal::PLAY_BG);
     }
 
+    if (sample_motion_frame_ && sample_motion_kind_ == 1 &&
+        frame_ - sample_motion_frame_ < 12) {
+        uint32_t age = frame_ - sample_motion_frame_;
+        int mx = WV_X + (int)motion_out(age, 12) * WV_W / 255;
+        d.rect(mx, WV_Y, 2, WV_H, with_alpha(pal::FLASH, (uint8_t)(220 - age * 15)));
+        // fade/crop ops read as a soft triangular wake without redrawing samples.
+        for (int i = 1; i <= 3; ++i) {
+            int tx = mx - i * 8;
+            if (tx >= WV_X) d.rect(tx, WV_Y, 3, WV_H, with_alpha(pal::CURSOR, (uint8_t)(80 / i)));
+        }
+    }
+
     // === marker grab handles ===
     // start: green post + flag pointing INTO the window (right)
     d.rect(sx, WV_Y - 3, 1, WV_H + 6, pal::TRACK1);
@@ -816,7 +765,9 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
                 sp.length = fx::Q15_ONE;
             }
         }
-        mark_dirty();
+        sample_motion_kind_ = 1;
+        sample_motion_frame_ = frame_;
+        mark_project_dirty();
         return;
     }
 
@@ -877,7 +828,7 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
             break;
     }
     if (sp.length < 1) sp.length = 1;
-    mark_dirty();
+    mark_project_dirty();
 }
 
 // === bottom-screen REC panel: bounce master output into this instrument's slot ===
@@ -949,7 +900,6 @@ bool App::kit_tab_touch(int x, int y) {
         int bx = ktab_x(i);
         if (x >= bx && x < bx + KTAB_W) {
             kit_panel_ = (KitPanel)i;
-            mark_dirty();
             return true;
         }
     }
@@ -985,7 +935,7 @@ int App::gen_drum_to_pad(int pad, int drum_type) {
         mixer_.cut_slot_voices(slot);
         synth::SampleBank::instance().slot(slot) = std::move(generated);
     }
-    mark_dirty();
+    mark_project_dirty();
     mixer_.start_voice(0, project_.make_voice(cur_inst_), inst.drumkit.base_note + pad, 110);
     return slot;
 }
@@ -1168,8 +1118,8 @@ void App::load_panel_input(const InputState& in, int slot) {
 
     // up/down - select
     if (wav_count_ > 0) {
-        if (in.up)   wav_sel_ = (wav_sel_ - 1 + wav_count_) % wav_count_;
-        if (in.down) wav_sel_ = (wav_sel_ + 1) % wav_count_;
+        if (in.up)   wav_sel_ = wrap_index(wav_sel_, -1, wav_count_);
+        if (in.down) wav_sel_ = wrap_index(wav_sel_, +1, wav_count_);
     }
     // Y = rescan. R+SELECT cannot work here: platform input reserves it for
     // screenshots before App sees the frame.
@@ -1285,7 +1235,7 @@ void App::load_panel_input(const InputState& in, int slot) {
                 mixer_.cut_slot_voices(slot);
                 s = std::move(tmp);
             }
-            mark_dirty();
+            mark_project_dirty();
             std::snprintf(smp_status_, sizeof(smp_status_), "%s: %s",
                           r == synth::WavLoadResult::Truncated ? "LOADED 15S" : "LOADED", s.name);
             // Keep LOAD open: A loads, X auditions, and the user can immediately
@@ -1340,7 +1290,6 @@ bool App::inst_tab_touch(int x, int y) {
             }
             inst_panel_ = next;
             if (inst_panel_ == InstPanel::Load) wav_scanned_ = false;   // rescan on opening LOAD
-            mark_dirty();
             return true;
         }
     }
@@ -1374,8 +1323,8 @@ bool App::update_fx_section(const InputState& in, seq::Instrument& inst) {
     if (in.up) { inst_fx_col_ = -1; return true; }
 
     // left/right move between FX cells.
-    if (in.left)  inst_fx_col_ = (inst_fx_col_ - 1 + FX_CELLS) % FX_CELLS;
-    if (in.right) inst_fx_col_ = (inst_fx_col_ + 1) % FX_CELLS;
+    if (in.left)  inst_fx_col_ = wrap_index(inst_fx_col_, -1, FX_CELLS);
+    if (in.right) inst_fx_col_ = wrap_index(inst_fx_col_, +1, FX_CELLS);
 
     // A/B = +/-1, X/Y = +/-16.
     int delta = 0;
@@ -1387,56 +1336,17 @@ bool App::update_fx_section(const InputState& in, seq::Instrument& inst) {
     if (delta) {
         snapshot_inst();   // FX defaults are part of the Instrument - same history
         switch (inst_fx_col_) {
-            case 0: {   // FILT type 0..4
-                int v = (int)inst.fx_filter_type + (delta > 0 ? 1 : -1);
-                if (v < 0) v = 0; if (v > 4) v = 4;
-                inst.fx_filter_type = (uint8_t)v;
+            case 0:   // FILT type 0..4
+                bump_clamped(inst.fx_filter_type, delta > 0 ? 1 : -1, 0, 4);
                 break;
-            }
-            case 1: {   // CUT 0..255
-                int v = (int)inst.fx_cutoff + delta;
-                if (v < 0) v = 0; if (v > 255) v = 255;
-                inst.fx_cutoff = (uint8_t)v;
-                break;
-            }
-            case 2: {   // RES 0..255
-                int v = (int)inst.fx_resonance + delta;
-                if (v < 0) v = 0; if (v > 255) v = 255;
-                inst.fx_resonance = (uint8_t)v;
-                break;
-            }
-            case 3: {   // DEL send 0..255
-                int v = (int)inst.fx_send_del + delta;
-                if (v < 0) v = 0; if (v > 255) v = 255;
-                inst.fx_send_del = (uint8_t)v;
-                break;
-            }
-            case 4: {   // REV send 0..255
-                int v = (int)inst.fx_send_rev + delta;
-                if (v < 0) v = 0; if (v > 255) v = 255;
-                inst.fx_send_rev = (uint8_t)v;
-                break;
-            }
-            case 5: {   // VOL 0..255
-                int v = (int)inst.fx_volume + delta;
-                if (v < 0) v = 0; if (v > 255) v = 255;
-                inst.fx_volume = (uint8_t)v;
-                break;
-            }
-            case 6: {   // PAN -128..127 (signed)
-                int v = (int)inst.fx_pan + delta;
-                if (v < -128) v = -128; if (v > 127) v = 127;
-                inst.fx_pan = (int8_t)v;
-                break;
-            }
-            case 7: {   // CRUSH bits 1..16 (16 = clean)
-                int v = (int)inst.fx_bits + delta;
-                if (v < 1) v = 1; if (v > 16) v = 16;
-                inst.fx_bits = (uint8_t)v;
-                break;
-            }
+            case 1: bump_clamped(inst.fx_cutoff, delta, 0, 255); break;
+            case 2: bump_clamped(inst.fx_resonance, delta, 0, 255); break;
+            case 3: bump_clamped(inst.fx_send_del, delta, 0, 255); break;
+            case 4: bump_clamped(inst.fx_send_rev, delta, 0, 255); break;
+            case 5: bump_clamped(inst.fx_volume, delta, 0, 255); break;
+            case 6: bump_clamped(inst.fx_pan, delta, -128, 127); break;
+            case 7: bump_clamped(inst.fx_bits, delta, 1, 16); break;
         }
-        mark_dirty();
         commit_inst();
     }
     return true;   // FX focused: consume the frame, suppress normal nav/edit
@@ -1483,15 +1393,12 @@ void App::update_instrument(const InputState& in) {
         constexpr int ZOOM_STEP  = fx::Q15_ONE / 64;
         start += in.analog_x * SCRUB_STEP;
         length -= in.analog_y * ZOOM_STEP;
-        if (length < 1) length = 1;
-        if (length > fx::Q15_ONE) length = fx::Q15_ONE;
-        if (start < 0) start = 0;
+        length = clamp_int(length, 1, fx::Q15_ONE);
         int max_start = fx::Q15_ONE - length;
-        if (start > max_start) start = max_start;
+        start = clamp_int(start, 0, max_start);
         inst.sampler.start = (fx::q15)start;
         inst.sampler.length = (fx::q15)length;
         edit_flash_frame_ = frame_;
-        mark_dirty();
         push_live_inst_params(cur_inst_);
         commit_inst();
         return;
@@ -1547,8 +1454,8 @@ void App::update_instrument(const InputState& in) {
         const int HALF = max_rows / 2;
         int col = inst_row_ / HALF;              // 0 or 1
         int pos = inst_row_ % HALF;
-        if (in.up)    pos = (pos - 1 + HALF) % HALF;
-        if (in.down)  pos = (pos + 1) % HALF;
+        if (in.up)    pos = wrap_index(pos, -1, HALF);
+        if (in.down)  pos = wrap_index(pos, +1, HALF);
         if (in.left)  col = 0;
         if (in.right) col = 1;
         inst_row_ = col * HALF + pos;
@@ -1557,15 +1464,15 @@ void App::update_instrument(const InputState& in) {
         // left/right hop columns keeping the vertical position (clamped).
         int col = dsn_col_of(inst_row_);
         int pos = inst_row_ - kDsnColStart[col];
-        if (in.up)    pos = (pos - 1 + kDsnColLen[col]) % kDsnColLen[col];
-        if (in.down)  pos = (pos + 1) % kDsnColLen[col];
+        if (in.up)    pos = wrap_index(pos, -1, kDsnColLen[col]);
+        if (in.down)  pos = wrap_index(pos, +1, kDsnColLen[col]);
         if (in.left  && col > 0) col--;
         if (in.right && col < 2) col++;
         if (pos >= kDsnColLen[col]) pos = kDsnColLen[col] - 1;
         inst_row_ = kDsnColStart[col] + pos;
     } else {
-        if (in.up)   inst_row_ = (inst_row_ - 1 + max_rows) % max_rows;
-        if (in.down) inst_row_ = (inst_row_ + 1) % max_rows;
+        if (in.up)   inst_row_ = wrap_index(inst_row_, -1, max_rows);
+        if (in.down) inst_row_ = wrap_index(inst_row_, +1, max_rows);
     }
 post_nav:
 
@@ -1588,7 +1495,6 @@ post_nav:
         // branch below, including preset loads and type switches (which replace
         // all params + the name and were previously irreversible).
         snapshot_inst();
-        mark_dirty();
         if (is_drum && inst_row_ >= 3 && inst_row_ < 19) {
             // edit sample slot for the pad
             int pad = inst_row_ - 3;
@@ -1607,54 +1513,29 @@ post_nav:
             int oi = inst_row_ - 6;
             auto& op = inst.fm.ops[oi];
             switch (inst_col_) {
-                case 0: {  // ratio_idx
-                    int v = (int)op.ratio_idx + delta;
-                    if (v < 0) v = 0;
-                    if (v > 15) v = 15;
-                    op.ratio_idx = (uint8_t)v;
+                case 0:  // ratio_idx
+                    bump_clamped(op.ratio_idx, delta, 0, 15);
                     break;
-                }
-                case 1: {  // wave (SIN/TRI/SAW/SQR, wraps)
-                    int v = (int)op.wave + (delta > 0 ? 1 : -1);
-                    if (v < 0) v = 3;
-                    if (v > 3) v = 0;
-                    op.wave = (uint8_t)v;
+                case 1:  // wave (SIN/TRI/SAW/SQR, wraps)
+                    op.wave = (uint8_t)wrap_index(op.wave, delta > 0 ? 1 : -1, 4);
                     break;
-                }
                 case 2: {  // level
                     int step = (delta == 16 ? 16 : delta == -16 ? -16 : delta);
-                    int v = (int)op.level + step;
-                    if (v < 0) v = 0; if (v > 127) v = 127;
-                    op.level = (uint8_t)v;
+                    bump_clamped(op.level, step, 0, 127);
                     break;
                 }
-                case 3: {  // attack
-                    int step = delta * 50;
-                    int v = (int)op.attack + step;
-                    if (v < 0) v = 0; if (v > 65535) v = 65535;
-                    op.attack = (uint16_t)v;
+                case 3:  // attack
+                    bump_clamped(op.attack, delta * 50, 0, 65535);
                     break;
-                }
-                case 4: {  // decay
-                    int step = delta * 100;
-                    int v = (int)op.decay + step;
-                    if (v < 0) v = 0; if (v > 65535) v = 65535;
-                    op.decay = (uint16_t)v;
+                case 4:  // decay
+                    bump_clamped(op.decay, delta * 100, 0, 65535);
                     break;
-                }
-                case 5: {  // sustain
-                    int v = (int)op.sustain + delta;
-                    if (v < 0) v = 0; if (v > 127) v = 127;
-                    op.sustain = (uint8_t)v;
+                case 5:  // sustain
+                    bump_clamped(op.sustain, delta, 0, 127);
                     break;
-                }
-                case 6: {  // release
-                    int step = delta * 100;
-                    int v = (int)op.release + step;
-                    if (v < 0) v = 0; if (v > 65535) v = 65535;
-                    op.release = (uint16_t)v;
+                case 6:  // release
+                    bump_clamped(op.release, delta * 100, 0, 65535);
                     break;
-                }
             }
         } else if (is_fm) {
             // top FM fields: 0=type 1=algo 2=fb 3=master_vol 4=table
@@ -1664,35 +1545,23 @@ post_nav:
                     if (inst_row_ >= 6 && inst.type != seq::InstrumentType::FmSynth) inst_row_ = 0;
                     break;
                 }
-                case 1: {
-                    int v = (int)inst.fm.algorithm + delta;
-                    if (v < 0) v = 0; if (v >= synth::FM_NUM_ALGOS) v = synth::FM_NUM_ALGOS - 1;
-                    inst.fm.algorithm = (uint8_t)v;
+                case 1:
+                    bump_clamped(inst.fm.algorithm, delta, 0, synth::FM_NUM_ALGOS - 1);
                     break;
-                }
-                case 2: {
-                    int v = (int)inst.fm.feedback + delta;
-                    if (v < 0) v = 0; if (v > 7) v = 7;
-                    inst.fm.feedback = (uint8_t)v;
+                case 2:
+                    bump_clamped(inst.fm.feedback, delta, 0, 7);
                     break;
-                }
-                case 3: {
-                    int v = (int)inst.fm.master_volume + delta;
-                    if (v < 0) v = 0; if (v > 127) v = 127;
-                    inst.fm.master_volume = (uint8_t)v;
+                case 3:
+                    bump_clamped(inst.fm.master_volume, delta, 0, 127);
                     break;
-                }
                 case 4: {
-                    int v = (int)inst.table_id + delta;
-                    if (v < -1) v = -1; if (v >= seq::MAX_TABLES) v = seq::MAX_TABLES - 1;
+                    int v = clamp_int((int)inst.table_id + delta, -1, seq::MAX_TABLES - 1);
                     inst.table_id = (v < 0) ? seq::EMPTY : (uint8_t)v;
                     break;
                 }
                 case 5: {
                     // PRESET: A/B cycles + loads
-                    int p = fm_preset_idx_ + delta;
-                    while (p < 0) p += synth::FM_PRESET_COUNT;
-                    p %= synth::FM_PRESET_COUNT;
+                    int p = wrap_index(fm_preset_idx_, delta, synth::FM_PRESET_COUNT);
                     fm_preset_idx_ = p;
                     synth::fm_load_preset(inst.fm, (synth::FmPreset)p);
                     // rename instrument
@@ -1727,9 +1596,7 @@ post_nav:
                         int idx = synth::WavetableBank::instance().index_of_slot(inst.wavsynth.user_slot);
                         if (idx >= 0) current = synth::WAVE_PRESET_COUNT + idx;
                     }
-                    int p = current + delta;
-                    while (p < 0) p += total;
-                    p %= total;
+                    int p = wrap_index(current, delta, total);
                     wav_preset_idx_ = p;
                     if (p < synth::WAVE_PRESET_COUNT) {
                         synth::wave_load_preset(inst.wavsynth, (synth::WavePreset)p);
@@ -1744,24 +1611,16 @@ post_nav:
                                       synth::WavetableBank::instance().name(inst.wavsynth.user_slot));
                     }
                 } else if (inst.type == seq::InstrumentType::Sampler) {
-                    int s = inst.sampler.sample_slot + delta;
-                    if (s < 0) s = 0;
-                    if (s >= synth::SAMPLE_BANK_SIZE) s = synth::SAMPLE_BANK_SIZE - 1;
-                    inst.sampler.sample_slot = s;
+                    bump_clamped(inst.sampler.sample_slot, delta, 0, synth::SAMPLE_BANK_SIZE - 1);
                 } else if (inst.type == seq::InstrumentType::DrumKit) {
-                    int v = (int)inst.drumkit.base_note + delta;
-                    if (v < 0) v = 0;
-                    if (v > 127) v = 127;
-                    inst.drumkit.base_note = (uint8_t)v;
+                    bump_clamped(inst.drumkit.base_note, delta, 0, 127);
                 }
                 break;
             }
             case 2: {
                 if (inst.type == seq::InstrumentType::DrumKit) {
                     // in drum mode row 2 = TABLE
-                    int v = (int)inst.table_id + delta;
-                    if (v < -1) v = -1;
-                    if (v >= seq::MAX_TABLES) v = seq::MAX_TABLES - 1;
+                    int v = clamp_int((int)inst.table_id + delta, -1, seq::MAX_TABLES - 1);
                     inst.table_id = (v < 0) ? seq::EMPTY : (uint8_t)v;
                 } else {
                     uint32_t* a = (inst.type == seq::InstrumentType::Wavsynth)
@@ -1781,16 +1640,10 @@ post_nav:
                 break;
             case 4:
                 if (inst.type == seq::InstrumentType::Wavsynth) {
-                    int v = (int)inst.wavsynth.sustain + delta * 1024;
-                    if (v < 0) v = 0;
-                    if (v > fx::Q15_ONE) v = fx::Q15_ONE;
-                    inst.wavsynth.sustain = (fx::q15)v;
+                    bump_clamped(inst.wavsynth.sustain, delta * 1024, 0, fx::Q15_ONE);
                 } else if (inst.type == seq::InstrumentType::Sampler) {
                     // FINE tune: +/-50 cents. A/B +/-1, X/Y +/-16 (fast)
-                    int v = (int)inst.sampler.fine_cents + delta;
-                    if (v < -50) v = -50;
-                    if (v >  50) v =  50;
-                    inst.sampler.fine_cents = (int8_t)v;
+                    bump_clamped(inst.sampler.fine_cents, delta, -50, 50);
                 }
                 break;
             case 5: {
@@ -1802,9 +1655,7 @@ post_nav:
                 break;
             }
             case 6: { // table id (non-drum)
-                int v = (int)inst.table_id + delta;
-                if (v < -1) v = -1;
-                if (v >= seq::MAX_TABLES) v = seq::MAX_TABLES - 1;
+                int v = clamp_int((int)inst.table_id + delta, -1, seq::MAX_TABLES - 1);
                 inst.table_id = (v < 0) ? seq::EMPTY : (uint8_t)v;
                 break;
             }
@@ -1813,6 +1664,14 @@ post_nav:
                 break;
             }
         }
+        // visual-only transition classification. Sounding voices receive the new
+        // params immediately below; no smoothing is inserted into the audio path.
+        const bool big_motion = inst_row_ == 0 ||
+            (is_fm && inst_row_ == 5) ||
+            (!is_fm && !is_sampler && !is_dsn && inst_row_ == 1) ||
+            (is_dsn && inst_row_ == DR_PRESET);
+        inst_motion_kind_ = big_motion ? 2 : 1;
+        inst_motion_frame_ = frame_;
         // any param edit -> refresh voices that are already sounding (live tweak)
         push_live_inst_params(cur_inst_);
         commit_inst();
@@ -1825,19 +1684,24 @@ post_nav:
         auto& smp = synth::SampleBank::instance().slot(inst.sampler.sample_slot);
         if (in.a && !smp.empty()) {
             // even 16-way slice across the whole sample
+            uint32_t before[synth::Sample::MAX_CHOPS];
+            std::memcpy(before, smp.chops, sizeof(before));
             uint32_t total = smp.num_frames();
             for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i)
                 smp.chops[i] = (uint32_t)((uint64_t)i * total / synth::Sample::MAX_CHOPS);
             smp_chop_sel_ = 0;
-            mark_dirty();
+            if (std::memcmp(before, smp.chops, sizeof(before)) != 0) mark_project_dirty();
             return;
         }
         if (in.b) {
             // clear all chops
-            for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i)
+            bool changed = false;
+            for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) {
+                if (smp.chops[i] != 0xFFFFFFFFu) changed = true;
                 smp.chops[i] = 0xFFFFFFFFu;
+            }
             smp_chop_sel_ = 0;
-            mark_dirty();
+            if (changed) mark_project_dirty();
             return;
         }
     }
@@ -1858,8 +1722,10 @@ post_nav:
             int v = smp.root_note + (in.a ? 1 : -1);
             if (v < 0) v = 0;
             if (v > 127) v = 127;
-            smp.root_note = v;
-            mark_dirty();
+            if (smp.root_note != v) {
+                smp.root_note = v;
+                mark_project_dirty();
+            }
         }
         return;
     }
@@ -1890,9 +1756,10 @@ void App::draw_fx_section(Draw& d, const seq::Instrument& inst) {
     constexpr int FX_X   = 24;     // cells start after the "FX" tag
     const bool focused = (inst_fx_col_ >= 0);
 
-    // opaque backing bar + thin separator on top (mirrors the phrase hint bar)
+    // opaque backing bar + separator. Passive structure stays quiet; the accent
+    // appears only once the FX strip actually owns focus.
     d.rect(0, BAR_Y - 2, 400, 14, pal::BG_HI);
-    d.rect(0, BAR_Y - 3, 400, 1, focused ? pal::CURSOR : pal::HEADER);
+    d.rect(0, BAR_Y - 3, 400, 1, focused ? pal::CURSOR : pal::GRID);
 
     // "FX" tag; when focused it glows as the section marker
     d.text(4, BAR_Y, "FX", focused ? pal::CURSOR : pal::FG_DIM);
@@ -1972,7 +1839,15 @@ void App::draw_instrument(Draw& d) {
     char buf[40];
     std::snprintf(buf, sizeof(buf), "INSTRUMENT %02X", cur_inst_);
     d.text(20, Y0, buf, pal::HEADER, 1);
-    d.text(20, Y0 + 12, inst.name, pal::FG, 1);
+    int name_x = 20;
+    if (inst_motion_frame_ && frame_ - inst_motion_frame_ < 8 && inst_motion_kind_ >= 2) {
+        uint8_t mt = motion_out(frame_ - inst_motion_frame_, 8);
+        name_x = motion_lerp(44, 20, mt);
+        // narrow reveal line: feels like a preset card arriving, costs one rect.
+        d.rect(18, Y0 + 11, (int)mt * 120 / 255, 1,
+               inst_motion_kind_ == 3 ? pal::PLAY : pal::CURSOR);
+    }
+    d.text(name_x, Y0 + 12, inst.name, pal::FG, 1);
 
     // bank awareness: instruments are GLOBAL, not owned by a track. editing
     // slot 00 changes every phrase whose I column says 00 - make that visible.
@@ -2664,9 +2539,8 @@ void App::draw_env_popup(Draw& d, uint32_t atk, uint32_t dec, fx::q15 sus,
     if (live_stage >= 1 && live_stage <= 4) {
         env_live_dot(d, X0, Yt, W, H, atk, dec, sus, rel,
                      live_stage, live_level, breathe_pulse(frame_, 24));
-        int32_t lv = live_level; if (lv < 0) lv = 0; if (lv > fx::Q15_ONE) lv = fx::Q15_ONE;
-        int ly = YB - (int)((int64_t)lv * H / fx::Q15_ONE);
-        if (ly < Yt) ly = Yt; if (ly > YB) ly = YB;
+        int32_t lv = clamp_int(live_level, 0, fx::Q15_ONE);
+        int ly = clamp_int(YB - (int)((int64_t)lv * H / fx::Q15_ONE), Yt, YB);
         d.rect(X0 + W + 1, ly, 3, 2, pal::FLASH);   // level readout tick
     }
 }

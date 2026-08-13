@@ -29,45 +29,45 @@ void App::update_project(const InputState& in) {
 
     // === R-held: rename mode ===
     if (in.held_r) {
-        if (in.left)  { rename_pos_ = (rename_pos_ - 1 + NAME_MAX) % NAME_MAX; }
-        if (in.right) { rename_pos_ = (rename_pos_ + 1) % NAME_MAX; }
+        if (in.left)  rename_pos_ = wrap_index(rename_pos_, -1, NAME_MAX);
+        if (in.right) rename_pos_ = wrap_index(rename_pos_, +1, NAME_MAX);
 
         if (in.a) {
             // cycle character forward. positions before the cursor that are
             // still '\0' become spaces so the string stays contiguous.
             for (int i = 0; i < rename_pos_; ++i)
                 if (project_.name[i] == 0) project_.name[i] = ' ';
-            int ci = char_index(project_.name[rename_pos_]);
-            ci = (ci + 1) % RENAME_SET_LEN;
+            int ci = wrap_index(char_index(project_.name[rename_pos_]), +1, RENAME_SET_LEN);
             project_.name[rename_pos_] = RENAME_CHARS[ci];
             project_.name[NAME_MAX] = 0;   // terminator is sacred
-            dirty = true;
+            mark_project_dirty();
         }
         if (in.b) {
             // cycle character backward
             for (int i = 0; i < rename_pos_; ++i)
                 if (project_.name[i] == 0) project_.name[i] = ' ';
-            int ci = char_index(project_.name[rename_pos_]);
-            ci = (ci - 1 + RENAME_SET_LEN) % RENAME_SET_LEN;
+            int ci = wrap_index(char_index(project_.name[rename_pos_]), -1, RENAME_SET_LEN);
             project_.name[rename_pos_] = RENAME_CHARS[ci];
             project_.name[NAME_MAX] = 0;
-            dirty = true;
+            mark_project_dirty();
         }
         if (in.x) {
             // clear character to space
-            project_.name[rename_pos_] = ' ';
-            project_.name[NAME_MAX] = 0;
-            dirty = true;
+            if (project_.name[rename_pos_] != ' ') {
+                project_.name[rename_pos_] = ' ';
+                project_.name[NAME_MAX] = 0;
+                mark_project_dirty();
+            }
         }
         return; // don't process grid navigation while renaming
     }
 
     // === normal mode: grid navigation ===
     bool moved = false;
-    if (in.up)    { proj_slot_ = (proj_slot_ - COLS + N) % N; moved = true; }
-    if (in.down)  { proj_slot_ = (proj_slot_ + COLS) % N;     moved = true; }
-    if (in.left)  { proj_slot_ = (proj_slot_ - 1 + N) % N;    moved = true; }
-    if (in.right) { proj_slot_ = (proj_slot_ + 1) % N;        moved = true; }
+    if (in.up)    { proj_slot_ = wrap_index(proj_slot_, -COLS, N); moved = true; }
+    if (in.down)  { proj_slot_ = wrap_index(proj_slot_, +COLS, N); moved = true; }
+    if (in.left)  { proj_slot_ = wrap_index(proj_slot_, -1, N);    moved = true; }
+    if (in.right) { proj_slot_ = wrap_index(proj_slot_, +1, N);    moved = true; }
 
     // any movement or other action - reset pending delete / pending load
     if (moved || in.x || in.y) { proj_confirm_delete_ = -1; proj_confirm_load_ = -1; }
@@ -77,7 +77,7 @@ void App::update_project(const InputState& in) {
     if (in.a) {
         // loading over unsaved work nukes it silently - that cost a discord user
         // a whole track. dirty project -> ask for a second press (delete-style).
-        if (dirty && proj_confirm_load_ != proj_slot_) {
+        if (project_dirty() && proj_confirm_load_ != proj_slot_) {
             proj_confirm_load_ = proj_slot_;
             std::snprintf(slot_status, sizeof(slot_status),
                 "UNSAVED CHANGES - PRESS A AGAIN TO LOAD");
@@ -141,8 +141,8 @@ void App::draw_project(Draw& d) {
         std::snprintf(name_buf, sizeof(name_buf), "%.24s", project_.name);
         // trim trailing spaces for display (but keep them in the actual buffer)
 
-        std::snprintf(buf, sizeof(buf), "NOW: %s%s", name_buf, dirty ? " *" : "");
-        d.text(10, 28, buf, dirty ? pal::CURSOR : pal::FG);
+        std::snprintf(buf, sizeof(buf), "NOW: %s%s", name_buf, project_dirty() ? " *" : "");
+        d.text(10, 28, buf, project_dirty() ? pal::CURSOR : pal::FG);
 
         // rename cursor: blinking underline under active character when R held
         if (mod_r_) {
@@ -199,12 +199,37 @@ void App::draw_project(Draw& d) {
             border = pal::CURSOR;
         } else if (present) {
             bg = pal::BG_HI;
-            border = pal::HEADER;
+            // Occupied slots are ordinary content, not eight simultaneous calls
+            // to action. Keep only the selected card on the accent hierarchy.
+            border = lerp_color(pal::BG_HI, pal::HEADER, 72);
         } else {
             bg = pal::BG;
-            border = pal::GRID;
+            border = lerp_color(pal::BG, pal::GRID, 96);
         }
         ui_button(d, x, y, CELL_W - 4, CELL_H - 4, bg, border);
+        // per-slot action acknowledgement. The filesystem work has already
+        // completed; this is a 12-frame overlay, never a fake progress spinner.
+        if (i == project_motion_slot_ && project_motion_frame_ &&
+            frame_ - project_motion_frame_ < 14) {
+            uint32_t age = frame_ - project_motion_frame_;
+            uint8_t mt = motion_out(age, 14);
+            Color ac = project_motion_kind_ == (uint8_t)ProjAction::Delete ? pal::RECORD
+                     : project_motion_kind_ == (uint8_t)ProjAction::Load ? pal::PLAY
+                     : pal::FLASH;
+            if (project_motion_kind_ == (uint8_t)ProjAction::Delete) {
+                int inset = (int)mt * (CELL_W / 2 - 3) / 255;
+                int aw = CELL_W - 4 - inset * 2;
+                if (aw < 1) aw = 1;
+                d.rect(x + inset, y + 2, aw, CELL_H - 8,
+                       with_alpha(ac, (uint8_t)(150 - age * 8)));
+            } else {
+                int fill = (int)mt * (CELL_H - 8) / 255;
+                d.rect(x + 2, y + CELL_H - 6 - fill, CELL_W - 8, fill,
+                       with_alpha(ac, (uint8_t)(120 - age * 5)));
+                d.rect(x + 2, y + CELL_H - 7 - fill, CELL_W - 8, 1, ac);
+            }
+        }
+
         // selected cell gets breathing corner brackets (matches every other view)
         if (selected && !confirm && !confirm_load) {
             uint8_t br = breathe_pulse(frame_, 64);
@@ -236,6 +261,16 @@ void App::draw_project(Draw& d) {
 
     // === status toast: bright for ~2s after the event, then dims ===
     if (slot_status[0]) {
+        // render is intentionally an acknowledgement, not fake progress: the
+        // current offline renderer is synchronous and cannot repaint mid-export.
+        if (project_motion_kind_ == 6 && project_motion_frame_ &&
+            frame_ - project_motion_frame_ < 18) {
+            uint32_t age = frame_ - project_motion_frame_;
+            int w = (int)motion_out(age, 18) * 380 / 255;
+            d.rect(10, 220, 380, 2, pal::GRID);
+            d.rect(10, 220, w, 2, pal::PLAY);
+            if (age < 10) d.text(372, 224, "OK", pal::FLASH);
+        }
         // detect text change (main writes the buffer directly) -> restart the fade
         static uint32_t last_hash = 0;
         uint32_t h = 5381;

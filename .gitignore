@@ -24,6 +24,10 @@ branding/wordmark_*.png
 *~
 .DS_Store
 
+# hardware screenshot dumps pulled off the SD card (raw BMPs, megabytes)
+# curated shots live in docs/ and are committed explicitly
+captures/
+
 # downloaded sample working dirs (don't ship kits in repo)
 _ex/
 _extracted/

@@ -82,6 +82,7 @@ public:
         inst_undo_.clear();
         step_snap_taken_ = false;
         phrase_tools_on_ = false;
+        phrase_tool_config_ = false;
         sel_mode_ = false;
     }
     // touch-keyboard write mode (issue #5: "REC off still records"):
@@ -110,13 +111,20 @@ public:
     void draw_top(Draw& d);
 
     // master scope renderer - honors scope_style_ (WAVE/BARS/DOTS/X-Y).
-    // shared by the bottom strip and the fullscreen visualizer.
-    void draw_master_scope(Draw& d, int x, int y, int w, int h);
+    // `filled` controls the center-axis fill used by compact diagnostics; the
+    // fullscreen performance scope requests a clean line without that glow.
+    void draw_master_scope(Draw& d, int x, int y, int w, int h, bool filled = true);
 
     // draw the bottom screen helper (320x240) - status, touch keyboard, debug info
     void draw_bottom(Draw& d);
 
     Screen current_screen() const { return screen_; }
+
+    // Project persistence state. UI-only settings (theme, scope, keyboard and
+    // KAOSS configuration) are stored separately and never touch this flag.
+    void mark_project_dirty() { project_dirty_ = true; }
+    void mark_project_clean() { project_dirty_ = false; }
+    bool project_dirty() const { return project_dirty_; }
 
     // cursor in the phrase view (for highlighting)
     int cursor_row() const { return cursor_row_; }
@@ -278,10 +286,15 @@ private:
         RotateUp = 0, RotateDown, Reverse,
         TransposeUp, TransposeDown, OctaveUp, OctaveDown,
         VelocityUp, VelocityDown, RampUp, RampDown,
+        Euclidean, Density, Humanize, Ratchet,
+        Mutate, RandomNotes, ChanceSpread, Every,
         COUNT
     };
     bool phrase_tools_on_ = false;
+    bool phrase_tool_config_ = false;  // generator parameter/seed page
     int phrase_tool_sel_ = 0;
+    int phrase_tool_amount_ = 0;
+    uint32_t phrase_tool_seed_ = 1;    // explicit and stable: same seed = same result
     bool phrase_tools_range_ = false;
     int phrase_tools_lo_ = 0, phrase_tools_hi_ = seq::PHRASE_STEPS - 1;
     void open_phrase_tools();
@@ -330,6 +343,52 @@ private:
     uint32_t kaoss_rip_frame_ = 0;
     uint32_t kaoss_menu_frame_ = 0;   // when the assign popup opened (unfold anim)
     uint32_t fx_help_frame_ = 0;      // when the fx help popup opened (unfold anim)
+    // Symmetric four-frame overlay exits. The original "on" flag remains true
+    // while closing so the underlying screen cannot receive the dismissing input.
+    uint32_t overlay_close_frame_ = 0;
+    bool theme_menu_closing_ = false;
+    bool help_closing_ = false;
+    bool fx_help_closing_ = false;
+    bool phrase_tools_closing_ = false;
+    int  kaoss_menu_closing_ = 0;     // remembers X/Y menu while kaoss_menu_ stays visible
+    void begin_overlay_close(bool& flag) { flag = true; overlay_close_frame_ = frame_; }
+
+    // Event motion: 16 phrase rows fit in one mask. Data changes immediately;
+    // this only paints a cheap staggered acknowledgement over the result.
+    uint16_t phrase_motion_mask_ = 0;
+    uint32_t phrase_motion_frame_ = 0;
+    int8_t   phrase_motion_dir_ = 1;  // +1 top->bottom, -1 bottom->top
+    void start_phrase_motion(uint16_t mask, int dir = 1) {
+        phrase_motion_mask_ = mask;
+        phrase_motion_dir_ = dir < 0 ? -1 : 1;
+        phrase_motion_frame_ = frame_;
+    }
+
+    // Live launch event detection is UI-only: compare Player queue/track state in tick().
+    uint8_t  launch_motion_mask_ = 0;
+    uint8_t  launch_stop_mask_ = 0;
+    uint8_t  launch_prev_queue_[8] = {seq::EMPTY,seq::EMPTY,seq::EMPTY,seq::EMPTY,
+                                       seq::EMPTY,seq::EMPTY,seq::EMPTY,seq::EMPTY};
+    uint32_t launch_motion_frame_ = 0;
+
+    // Small generic action flashes. Kinds are visual only; no audio/data waits.
+    uint32_t inst_motion_frame_ = 0;
+    uint8_t  inst_motion_kind_ = 0;   // 1=parameter, 2=preset/type, 3=history
+    uint32_t sample_motion_frame_ = 0;
+    uint8_t  sample_motion_kind_ = 0; // 1=wave op, 2=slice rebuild, 3=marker/delete
+    uint32_t project_motion_frame_ = 0;
+    uint8_t  project_motion_kind_ = 0; // ProjAction value, 6=render
+    int8_t   project_motion_slot_ = -1;
+
+public:
+    // Platform-side save/load/render completes synchronously between frames; this
+    // starts the matching visual acknowledgement once control returns to the UI.
+    void notify_project_motion(int slot, uint8_t kind) {
+        project_motion_slot_ = (int8_t)slot;
+        project_motion_kind_ = kind;
+        project_motion_frame_ = frame_;
+    }
+private:
 
     // song view playhead trail: per-track previous row + when it moved
     // (the old cell ghosts out over ~24 frames)
@@ -413,6 +472,10 @@ private:
     int     mixer_col_ = 0;
     int     mixer_row_ = 0;
     bool    mixer_touch_active_ = false;   // finger dragging a bottom-screen fader
+    uint8_t mixer_ghost_value_[9] = {0};   // previous cap position for touch trail
+    uint32_t mixer_ghost_frame_[9] = {0};
+    uint8_t mixer_mute_motion_mask_ = 0;
+    uint32_t mixer_mute_motion_frame_ = 0;
 
     // touch keyboard
     int     octave_ = 4;            // from 0 to 8
@@ -570,7 +633,6 @@ public:
     void cycle_theme() {
         theme_idx = (theme_idx + 1) % pal::theme_count();
         pal::apply_theme(theme_idx);
-        mark_dirty();
     }
     void set_theme(int i) {
         if (i < 0 || i >= pal::theme_count()) i = 0;
@@ -580,10 +642,6 @@ public:
     // recording tint: main tells us if audio capture is live (mic / resample);
     // tick() re-applies the theme + breathing red tint while it lasts.
     void set_recording(bool r) { recording_now_ = r; }
-
-    // dirty flag - true if the user changed something. used in main to decide whether autosave is needed
-    bool dirty = false;
-    void mark_dirty() { dirty = true; }
 
     // === system status (set by platform/main every frame) ===
     // battery_level: 0..5 (ptmu), charging: on charger, hour/minute: RTC
@@ -622,6 +680,7 @@ public:
         scope_style_ = s.scope_style < SCOPE_STYLES ? s.scope_style : 0;
     }
 private:
+    bool project_dirty_ = false;
 };
 
 } // namespace trackr::ui

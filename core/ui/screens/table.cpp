@@ -4,27 +4,28 @@
 #include "../ui_internal.h"
 #include "../../sequencer/fx.h"
 #include <cstdio>
+#include <cstring>
 
 namespace trackr::ui {
 
 void App::update_table(const InputState& in) {
     constexpr int N_COLS = 6;   // 3 fx-slots × (cmd, val)
-    if (in.up)    table_row_ = (table_row_ - 1 + seq::TABLE_ROWS) % seq::TABLE_ROWS;
-    if (in.down)  table_row_ = (table_row_ + 1) % seq::TABLE_ROWS;
-    if (in.left)  table_col_ = (table_col_ - 1 + N_COLS) % N_COLS;
-    if (in.right) table_col_ = (table_col_ + 1) % N_COLS;
+    if (in.up)    table_row_ = wrap_index(table_row_, -1, seq::TABLE_ROWS);
+    if (in.down)  table_row_ = wrap_index(table_row_, +1, seq::TABLE_ROWS);
+    if (in.left)  table_col_ = wrap_index(table_col_, -1, N_COLS);
+    if (in.right) table_col_ = wrap_index(table_col_, +1, N_COLS);
 
     // R+A/B = table speed (ticks per row, 1..16). the table used to fly at one
     // row per TICK with no brake - at groove 6 that's 6 rows per step.
     if (in.held_r && (in.a || in.b)) {
         uint8_t& spd = project_.table_speed[cur_table_];
-        int v = (spd < 1) ? 1 : spd;      // 0 = legacy default = 1
-        v += in.a ? 1 : -1;
-        if (v < 1) v = 1;
-        if (v > 16) v = 16;
-        spd = (uint8_t)v;
-        edit_flash_frame_ = frame_;
-        dirty = true;
+        bool changed = false;
+        if (spd < 1) { spd = 1; changed = true; } // 0 = legacy default = 1
+        changed = bump_clamped(spd, in.a ? 1 : -1, 1, 16) || changed;
+        if (changed) {
+            edit_flash_frame_ = frame_;
+            mark_project_dirty();
+        }
         return;                            // don't fall through to cell edit
     }
 
@@ -36,6 +37,7 @@ void App::update_table(const InputState& in) {
     if (in.encoder_delta) delta = in.encoder_delta;
     if (delta) {
         auto& row = project_.tables[cur_table_].rows[table_row_];
+        const auto before = row;
         int slot = table_col_ / 2;
         bool is_cmd = (table_col_ & 1) == 0;
         if (is_cmd) {
@@ -49,28 +51,27 @@ void App::update_table(const InputState& in) {
             int idx = -1;
             int n = sizeof(fx_letters) - 1;
             if (cur != 0) for (int i = 0; i < n; ++i) if (fx_letters[i] == cur) { idx = i; break; }
-            idx += (delta > 0 ? 1 : -1);
-            if (idx < -1) idx = -1;
-            if (idx >= n) idx = n - 1;
+            idx = clamp_int(idx + (delta > 0 ? 1 : -1), -1, n - 1);
             row.fx[slot].cmd = (idx == -1) ? 0 : (uint8_t)fx_letters[idx];
         } else {
             int vmax = seq::fx_value_max(row.fx[slot].cmd);
-            int v = (int)row.fx[slot].value + delta;
-            if (v < 0) v = 0;
-            if (v > vmax) v = vmax;
-            row.fx[slot].value = (uint8_t)v;
+            bump_clamped(row.fx[slot].value, delta, 0, vmax);
         }
-        edit_flash_frame_ = frame_;   // value-flash animation
-        dirty = true;
+        if (std::memcmp(&before, &row, sizeof(row)) != 0) {
+            edit_flash_frame_ = frame_;   // value-flash animation
+            mark_project_dirty();
+        }
     }
 
     // SELECT - assign this table to the current instrument AND fire a preview
     // note. NB the note itself won't run the table (tables tick inside the
     // player during playback) - the assignment is the real payload here.
     if (in.select_) {
-        project_.instruments[cur_inst_].table_id = cur_table_;
+        if (project_.instruments[cur_inst_].table_id != cur_table_) {
+            project_.instruments[cur_inst_].table_id = cur_table_;
+            mark_project_dirty();
+        }
         mixer_.start_voice(0, project_.make_voice(cur_inst_), 60, 110);
-        dirty = true;
     }
 }
 
@@ -165,7 +166,7 @@ void App::draw_table(Draw& d) {
     {
         const int HY = 228;
         d.rect(0, HY - 2, 400, 14, pal::BG_HI);
-        d.rect(0, HY - 3, 400, 1, pal::HEADER);
+        d.rect(0, HY - 3, 400, 1, pal::GRID);
         int slot = table_col_ / 2;
         const auto& row = project_.tables[cur_table_].rows[table_row_];
         uint8_t cmd = row.fx[slot].cmd;

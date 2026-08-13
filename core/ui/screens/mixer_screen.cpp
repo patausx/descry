@@ -7,6 +7,7 @@
 #include "../ui_internal.h"
 #include "../../audio/fixed.h"
 #include <cstdio>
+#include <cstring>
 
 namespace trackr::ui {
 
@@ -39,15 +40,15 @@ void App::sync_mixer_from_song() {
 
 void App::update_mixer(const InputState& in) {
     // navigation: left/right across strips; up/down inside the master strip / groove zone
-    if (in.left)  mixer_col_ = (mixer_col_ - 1 + MX_COLS) % MX_COLS;
-    if (in.right) mixer_col_ = (mixer_col_ + 1) % MX_COLS;
+    if (in.left)  mixer_col_ = wrap_index(mixer_col_, -1, MX_COLS);
+    if (in.right) mixer_col_ = wrap_index(mixer_col_, +1, MX_COLS);
     if (mixer_col_ == MX_MASTER) {
-        if (in.up)   mixer_row_ = (mixer_row_ - 1 + MR_ROWS) % MR_ROWS;
-        if (in.down) mixer_row_ = (mixer_row_ + 1) % MR_ROWS;
+        if (in.up)   mixer_row_ = wrap_index(mixer_row_, -1, MR_ROWS);
+        if (in.down) mixer_row_ = wrap_index(mixer_row_, +1, MR_ROWS);
         if (mixer_row_ >= MR_ROWS) mixer_row_ = 0;
     } else if (mixer_col_ == MX_GROOVE) {
-        if (in.up)   mixer_row_ = (mixer_row_ - 1 + seq::PHRASE_STEPS) % seq::PHRASE_STEPS;
-        if (in.down) mixer_row_ = (mixer_row_ + 1) % seq::PHRASE_STEPS;
+        if (in.up)   mixer_row_ = wrap_index(mixer_row_, -1, seq::PHRASE_STEPS);
+        if (in.down) mixer_row_ = wrap_index(mixer_row_, +1, seq::PHRASE_STEPS);
     } else {
         // track strip: row 0 = fader, row 1 = duck depth
         if (in.up || in.down) mixer_row_ = mixer_row_ ? 0 : 1;
@@ -68,65 +69,60 @@ void App::update_mixer(const InputState& in) {
         uint8_t& g = song.groove_steps[mixer_row_];
         if (in.a || in.b || in.encoder_delta) {
             int step = in.encoder_delta ? in.encoder_delta : (in.a ? 1 : -1);
-            int v = (int)g + step;
-            if (v < 0) v = 0;
-            if (v > 12) v = 12;
-            g = (uint8_t)v;
-            dirty = true;
+            if (bump_clamped(g, step, 0, 12)) mark_project_dirty();
         }
-        if (in.x) { g = 6; dirty = true; }
-        if (in.y) { g = 0; dirty = true; }
+        if (in.x && g != 6) { g = 6; mark_project_dirty(); }
+        if (in.y && g != 0) { g = 0; mark_project_dirty(); }
         sync_mixer_from_song();
         return;
     }
 
     if (delta) {
-        auto bump = [&](uint8_t& v) {
-            int nv = (int)v + delta;
-            if (nv < 0) nv = 0;
-            if (nv > 255) nv = 255;
-            v = (uint8_t)nv;
-        };
+        const auto before_song = song;
+        const uint8_t before_rev_size = project_.rev_size;
+        const uint8_t before_rev_damp = project_.rev_damp;
         if (mixer_col_ < MX_TRACKS) {
             // track strip: row 0 = channel fader, row 1 = sidechain duck depth
-            if (mixer_row_ == 1) bump(song.track_duck[mixer_col_]);
-            else                 bump(song.track_vol[mixer_col_]);
+            if (mixer_row_ == 1) bump_clamped(song.track_duck[mixer_col_], delta, 0, 255);
+            else                 bump_clamped(song.track_vol[mixer_col_], delta, 0, 255);
         } else if (mixer_col_ == MX_MASTER) switch (mixer_row_) {
-            case MR_MASTER:   bump(song.master_vol); break;
-            case MR_DLY_TIME: bump(song.dly_time);   break;
-            case MR_DLY_FB:   bump(song.dly_fb);     break;
-            case MR_DLY_WET:  bump(song.dly_wet);    break;
-            case MR_REV_WET:  bump(song.rev_wet);    break;
+            case MR_MASTER:   bump_clamped(song.master_vol, delta, 0, 255); break;
+            case MR_DLY_TIME: bump_clamped(song.dly_time, delta, 0, 255);   break;
+            case MR_DLY_FB:   bump_clamped(song.dly_fb, delta, 0, 255);     break;
+            case MR_DLY_WET:  bump_clamped(song.dly_wet, delta, 0, 255);    break;
+            case MR_REV_WET:  bump_clamped(song.rev_wet, delta, 0, 255);    break;
             case MR_REV_SIZE:
                 if (!project_.rev_size) project_.rev_size = 92;   // legacy 0 -> default first
-                bump(project_.rev_size);
+                bump_clamped(project_.rev_size, delta, 0, 255);
                 if (!project_.rev_size) project_.rev_size = 1;    // keep out of legacy 0
                 break;
             case MR_REV_DAMP:
                 if (!project_.rev_damp) project_.rev_damp = 85;
-                bump(project_.rev_damp);
+                bump_clamped(project_.rev_damp, delta, 0, 255);
                 if (!project_.rev_damp) project_.rev_damp = 1;
                 break;
             case MR_DUCK_SRC: {
                 // src cycles OFF, T0..T7 (delta sign only - it's an enum not a level)
-                int v = (song.duck_src == 0xFF) ? -1 : song.duck_src;
-                v += (delta > 0) ? 1 : -1;
-                if (v < -1) v = seq::NUM_TRACKS - 1;
-                if (v >= seq::NUM_TRACKS) v = -1;
+                int v = wrap_index((song.duck_src == 0xFF) ? 0 : song.duck_src + 1,
+                                   delta > 0 ? 1 : -1, seq::NUM_TRACKS + 1) - 1;
                 song.duck_src = (v < 0) ? 0xFF : (uint8_t)v;
                 break;
             }
-            case MR_DUCK_REL: bump(song.duck_rel);   break;
+            case MR_DUCK_REL: bump_clamped(song.duck_rel, delta, 0, 255); break;
         }
-        dirty = true;
+        if (std::memcmp(&before_song, &song, sizeof(song)) != 0 ||
+            before_rev_size != project_.rev_size || before_rev_damp != project_.rev_damp)
+            mark_project_dirty();
     }
 
     // SELECT on a track strip = mute toggle (matches song-view mute pads).
     // writes the PROJECT mask (persisted + survives PLAY), mixer follows via sync.
     if (in.select_ && mixer_col_ < MX_TRACKS) {
         project_.track_mute ^= (uint8_t)(1u << mixer_col_);
+        mixer_mute_motion_mask_ |= (uint8_t)(1u << mixer_col_);
+        mixer_mute_motion_frame_ = frame_;
         if (project_.track_mute & (1u << mixer_col_)) mixer_.note_off_all(mixer_col_);
-        mark_dirty();
+        mark_project_dirty();
     }
 
     // keep the audio mixer in sync every frame (cheap)
@@ -175,7 +171,14 @@ void App::draw_mixer_faders(Draw& d) {
         if (fill > 0) d.rect(x + 2, fy + fh - 1 - fill, w - 4, fill,
                              lerp_color(pal::PANEL, fc, 180));
         // cap line
-        d.rect(x, fy + fh - 1 - fill, w, 2, fc);
+        d.rect(x, fy + fh - 1 - fill, w, mixer_touch_active_ && sel ? 3 : 2, fc);
+        // old cap ghosts out after a move, making the physical travel readable.
+        uint32_t ga = frame_ - mixer_ghost_frame_[i];
+        if (mixer_ghost_frame_[i] && ga < 8) {
+            int gf = (int)mixer_ghost_value_[i] * (fh - 2) / 255;
+            d.rect(x + 2, fy + fh - 1 - gf, w - 4, 1,
+                   with_alpha(pal::FG, (uint8_t)(150 - ga * 18)));
+        }
         // live peak meter: thin line on the right edge (tracks only)
         if (!master) {
             int mh = (int)mixer_.track(i).meter * (fh - 2) / fx::Q15_ONE;
@@ -191,6 +194,14 @@ void App::draw_mixer_faders(Draw& d) {
             if (ph > 2) d.rect(x + w - 3, fy + fh - 1 - ph, 2, 1, pal::FG);
         }
         // numeric value at the bottom of the well (bright when this strip is selected)
+        if (!master && (mixer_mute_motion_mask_ & (1u << i)) &&
+            frame_ - mixer_mute_motion_frame_ < 6) {
+            uint32_t ma = frame_ - mixer_mute_motion_frame_;
+            int sh = (int)motion_out(ma, 6) * (fh - 2) / 255;
+            d.rect(x + 1, fy, w - 2, sh,
+                   with_alpha(muted ? pal::RECORD : pal::PLAY, (uint8_t)(130 - ma * 14)));
+        }
+        // numeric value at the bottom of the well (bright when this strip is selected)
         char vb[5];
         std::snprintf(vb, sizeof(vb), "%3d", vol);
         d.text(x + (w - 18) / 2, fy + fh - 10, vb, sel ? pal::FG : pal::FG_DIM);
@@ -199,9 +210,7 @@ void App::draw_mixer_faders(Draw& d) {
 
 void App::mixer_fader_touch(int x, int y, bool is_move) {
     if (y < MF_Y) return;
-    int i = (x - 2) / MF_W;
-    if (i < 0) i = 0;
-    if (i >= MF_N) i = MF_N - 1;
+    int i = clamp_int((x - 2) / MF_W, 0, MF_N - 1);
     const bool master = (i == 8);
     auto& song = project_.song;
 
@@ -209,10 +218,12 @@ void App::mixer_fader_touch(int x, int y, bool is_move) {
     if (!is_move && y < MF_Y + MF_HEAD) {
         if (!master) {
             project_.track_mute ^= (uint8_t)(1u << i);
+            mixer_mute_motion_mask_ |= (uint8_t)(1u << i);
+            mixer_mute_motion_frame_ = frame_;
             if (project_.track_mute & (1u << i)) mixer_.note_off_all(i);
         }
         mixer_col_ = i;
-        mark_dirty();
+        if (!master) mark_project_dirty();
         sync_mixer_from_song();
         return;
     }
@@ -220,13 +231,15 @@ void App::mixer_fader_touch(int x, int y, bool is_move) {
     // fader zone: finger Y -> volume (bottom = 0, top = 255)
     int fy = MF_Y + MF_HEAD;
     int fh = MF_H - MF_HEAD;
-    int v = (fy + fh - 1 - y) * 255 / (fh - 2);
-    if (v < 0) v = 0;
-    if (v > 255) v = 255;
-    if (master) song.master_vol = (uint8_t)v;
-    else        song.track_vol[i] = (uint8_t)v;
+    int v = clamp_int((fy + fh - 1 - y) * 255 / (fh - 2), 0, 255);
+    uint8_t& target = master ? song.master_vol : song.track_vol[i];
+    if (target != (uint8_t)v) {
+        mixer_ghost_value_[i] = target;
+        mixer_ghost_frame_[i] = frame_;
+        target = (uint8_t)v;
+        mark_project_dirty();
+    }
     mixer_col_ = i;          // follow the finger with the cursor
-    mark_dirty();
     // push into the audio mixer right away (don't wait for update_mixer)
     sync_mixer_from_song();
 }

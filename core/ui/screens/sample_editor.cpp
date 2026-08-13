@@ -40,7 +40,7 @@ void App::on_rec_done(int slot) {
         }
     }
     cur_sample_ = (uint8_t)slot;
-    mark_dirty();
+    mark_project_dirty();
 }
 
 int App::make_wavetable_from_sample(int sample_slot) {
@@ -99,7 +99,7 @@ int App::make_wavetable_from_sample(int sample_slot) {
     cur_inst_ = (uint8_t)inst_id;
     wav_preset_idx_ = synth::WAVE_PRESET_COUNT + bank.index_of_slot(wt_slot);
     std::snprintf(smp_status_, sizeof(smp_status_), "WT %02d > INST %02X", wt_slot, inst_id);
-    mark_dirty();
+    mark_project_dirty();
     return inst_id;
 }
 
@@ -125,7 +125,7 @@ int App::make_sampler_inst_from_sample(int sample_slot) {
     inst.sampler.release = 4000;
     std::snprintf(inst.name, sizeof(inst.name), "smp%02d", sample_slot);
     std::snprintf(smp_status_, sizeof(smp_status_), "SAMPLER > INST %02X", free_id);
-    mark_dirty();
+    mark_project_dirty();
     return free_id;
 }
 
@@ -170,7 +170,7 @@ int App::make_kit_from_sample(int sample_slot) {
     std::snprintf(smp_status_, sizeof(smp_status_), "%s KIT %02X: %d PADS",
                   rebuild ? "REBUILT" : "NEW", kit_id, n);
     cur_inst_ = (uint8_t)kit_id;
-    mark_dirty();
+    mark_project_dirty();
     return kit_id;
 }
 
@@ -206,7 +206,7 @@ int App::spread_slices_to_phrase(int sample_slot) {
     }
     ph.length = seq::PHRASE_STEPS;
     std::snprintf(smp_status_, sizeof(smp_status_), "%d/%d SLICES > PHR %02X", placed, n, cur_phrase_);
-    mark_dirty();
+    mark_project_dirty();
     return placed;
 }
 
@@ -214,6 +214,7 @@ void App::shuffle_phrase_steps() {
     auto& ph = project_.phrases[cur_phrase_];
     int len = seq::phrase_len(ph);
     if (len < 2) return;
+    seq::Phrase before = ph;
     static uint32_t rng = 0;
     rng ^= frame_ * 2654435761u;
     if (!rng) rng = 0x9E3779B9u;
@@ -226,7 +227,12 @@ void App::shuffle_phrase_steps() {
         snapshot_step(j); ph.steps[j] = tmp; commit_step(j);
     }
     std::snprintf(smp_status_, sizeof(smp_status_), "SHUFFLED PHR %02X", cur_phrase_);
-    mark_dirty();
+    uint16_t mask = 0;
+    for (int r = 0; r < len; ++r)
+        if (std::memcmp(&before.steps[r], &ph.steps[r], sizeof(seq::PhraseStep)) != 0)
+            mask |= (uint16_t)(1u << r);
+    start_phrase_motion(mask, 1);
+    mark_project_dirty();
 }
 
 } // namespace trackr::ui

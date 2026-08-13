@@ -295,16 +295,16 @@ static uint32_t sample_fingerprint(const synth::Sample& s) {
     return r ? r : 1;   // reserve 0 for "no fingerprint"
 }
 
-static void save_sample_to_sd(int slot) {
+static bool save_sample_to_sd(int slot) {
     auto& s = synth::SampleBank::instance().slot(slot);
-    if (s.data.empty()) return;
+    if (s.data.empty()) return true;
     mkdir("sdmc:/3ds", 0777);
     mkdir(SAMPLE_DIR, 0777);
     char path[64], tmp_path[72];
     std::snprintf(path, sizeof(path), "%s/sample_%02d.s16", SAMPLE_DIR, slot);
     std::snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
     FILE* f = std::fopen(tmp_path, "wb");
-    if (!f) return;
+    if (!f) return false;
     SampleFileHeader h{};
     h.magic       = SAMPLE_FILE_MAGIC;
     h.version     = SAMPLE_FILE_VERSION;
@@ -318,9 +318,9 @@ static void save_sample_to_sd(int slot) {
            && std::fwrite(&s.slice_rev_mask, sizeof(s.slice_rev_mask), 1, f) == 1
            && std::fwrite(s.data.data(), sizeof(int16_t), s.data.size(), f) == s.data.size();
     ok = (std::fclose(f) == 0) && ok;
-    if (!ok) { std::remove(tmp_path); return; }
+    if (!ok) { std::remove(tmp_path); return false; }
     std::remove(path);
-    if (std::rename(tmp_path, path) != 0) { std::remove(tmp_path); return; }
+    if (std::rename(tmp_path, path) != 0) { std::remove(tmp_path); return false; }
 
     // sample name persistence sidecar. PCM stays in backward-compatible .s16;
     // names are tiny and should also be written atomically.
@@ -331,17 +331,18 @@ static void save_sample_to_sd(int slot) {
         FILE* nf = std::fopen(name_tmp, "wb");
         bool nok = nf && std::fwrite(s.name, 1, ::strnlen(s.name, sizeof(s.name)), nf) == ::strnlen(s.name, sizeof(s.name));
         if (nf) nok = (std::fclose(nf) == 0) && nok;
-        if (nok) {
-            std::remove(name_path);
-            if (std::rename(name_tmp, name_path) != 0) std::remove(name_tmp);
-        } else {
+        if (!nok) { std::remove(name_tmp); return false; }
+        std::remove(name_path);
+        if (std::rename(name_tmp, name_path) != 0) {
             std::remove(name_tmp);
+            return false;
         }
     } else {
         std::remove(name_path);
         std::remove(name_tmp);
     }
     g_sample_hash[slot] = sample_fingerprint(s);   // written = clean
+    return true;
 }
 
 static void load_sample_from_sd(int slot) {
@@ -443,33 +444,44 @@ static void load_sample_from_sd(int slot) {
     g_sample_hash[slot] = sample_fingerprint(s);   // freshly loaded = clean
 }
 
-static void save_full_project() {
-    mkdir("sdmc:/3ds", 0777);
-    mkdir(SAMPLE_DIR, 0777);
-    seq::save_project(g_project, SESSION_PATH);
-    // plus all non-empty samples - but ONLY the ones that actually changed
-    // since load / last save (fingerprint diff). typical exit: zero SD writes
-    // for samples -> app closes near-instantly instead of ~15s.
+static bool save_changed_samples() {
+    bool ok = true;
+    // Persist every changed non-empty sample. Failed slots retain their old
+    // fingerprint, so a later save/exit retries them.
     for (int i = 0; i < synth::SAMPLE_BANK_SIZE; ++i) {
         auto& s = synth::SampleBank::instance().slot(i);
         if (s.data.empty()) continue;
         if (sample_fingerprint(s) == g_sample_hash[i]) continue;
-        save_sample_to_sd(i);
+        if (!save_sample_to_sd(i)) ok = false;
     }
+    return ok;
 }
-static void load_full_project() {
+
+static bool save_full_project() {
+    mkdir("sdmc:/3ds", 0777);
+    mkdir(SAMPLE_DIR, 0777);
+    const bool project_ok = seq::save_project(g_project, SESSION_PATH);
+    // Samples are global rather than embedded in Project, but they are part of
+    // what the user expects SAVE to protect.
+    const bool samples_ok = save_changed_samples();
+    return project_ok && samples_ok;
+}
+static bool load_full_project() {
     // SD read into a heap temp WITHOUT the lock (an SD read under the audio
     // lock stalls the worker = audible dropout of ringing tails), then swap
     // the ~62KB into the live project under the lock. caller stops playback.
     auto* tmp = new (std::nothrow) seq::Project();
-    if (tmp && seq::load_project(*tmp, SESSION_PATH)) {
+    bool loaded = tmp && seq::load_project(*tmp, SESSION_PATH);
+    if (loaded) {
         audio::Mixer::LockGuard _g(g_mixer);
         g_project = *tmp;
     }
     delete tmp;
-    for (int i = 0; i < synth::SAMPLE_BANK_SIZE; ++i) {
-        load_sample_from_sd(i);
+    if (loaded) {
+        for (int i = 0; i < synth::SAMPLE_BANK_SIZE; ++i)
+            load_sample_from_sd(i);
     }
+    return loaded;
 }
 
 // === named slot ops ===
@@ -552,8 +564,8 @@ static void refresh_slots(ui::App& app) {
 // there used to be an inline AudioSimple duplicate - it ate the UI thread's cpu, crackled on vsync. removed.
 
 // === demo project setup ===
-static void setup_demo() {
-    auto& i0 = g_project.instruments[0];
+static void setup_demo(seq::Project& project) {
+    auto& i0 = project.instruments[0];
     i0.type = seq::InstrumentType::Wavsynth;
     std::strcpy(i0.name, "saw lead");
     i0.wavsynth.shape   = synth::WaveShape::Saw;
@@ -564,7 +576,7 @@ static void setup_demo() {
     i0.table_id = 0;     // attach table 00 - filter sweep
 
     // demo table 00 - filter sweep + tremolo (16 rows, looping)
-    auto& tbl0 = g_project.tables[0];
+    auto& tbl0 = project.tables[0];
     // smooth cutoff sweep from 30..FF and back
     static const uint8_t sweep[16] = {
         0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0, 0xFF,
@@ -581,7 +593,7 @@ static void setup_demo() {
         tbl0.rows[i].fx[1].value = trem[i];
     }
 
-    auto& i1 = g_project.instruments[1];
+    auto& i1 = project.instruments[1];
     i1.type = seq::InstrumentType::Sampler;
     std::strcpy(i1.name, "mic samp");
     i1.sampler.sample_slot = 0;
@@ -597,7 +609,7 @@ static void setup_demo() {
     //   pad 4 (E)   = clap     | pad 5 (F)  = tom
     //   pad 6 (F#)  = rim      | pad 7..15  = empty
     {
-        auto& it = g_project.instruments[2];
+        auto& it = project.instruments[2];
         it.type = seq::InstrumentType::DrumKit;
         std::strcpy(it.name, "drum kit");
         it.drumkit = synth::DrumKitParams{};
@@ -610,8 +622,8 @@ static void setup_demo() {
     // === BREAKBEAT DEMO ===
     // phrase 0 - BASS line on saw lead (no mod table, clean sound)
     // disable table_id for instrument 0 - so the saw plays without fx wob
-    g_project.instruments[0].table_id = seq::EMPTY;
-    auto& p0 = g_project.phrases[0];
+    project.instruments[0].table_id = seq::EMPTY;
+    auto& p0 = project.phrases[0];
     // pulsing bass (low notes A2/D3/F2/G2)
     static const int bass_notes[seq::PHRASE_STEPS] = {
         45, 0xFF, 45, 0xFF,    50, 0xFF, 0xFF, 0xFF,
@@ -624,12 +636,12 @@ static void setup_demo() {
             p0.steps[i].velocity = 100;
         }
     }
-    g_project.chains[0].rows[0].phrase = 0;
+    project.chains[0].rows[0].phrase = 0;
 
     // phrase 1 - KICK breakbeat (syncopated)
     // step:    0 1 2 3 4 5 6 7 8 9 A B C D E F
     // kick:    K . . . . . K . . . K . . K . .
-    auto& p1 = g_project.phrases[1];
+    auto& p1 = project.phrases[1];
     for (int s : {0, 6, 10, 13}) {
         p1.steps[s].note = 60;          // C-4 = pad 0 = kick
         p1.steps[s].instrument = 2;     // drum kit
@@ -637,7 +649,7 @@ static void setup_demo() {
     }
 
     // phrase 2 - SNARE backbeat + ghost notes
-    auto& p2 = g_project.phrases[2];
+    auto& p2 = project.phrases[2];
     for (int s : {4, 12}) {
         p2.steps[s].note = 61;          // C#-4 = pad 1 = snare
         p2.steps[s].instrument = 2;
@@ -650,7 +662,7 @@ static void setup_demo() {
     }
 
     // phrase 3 - HAT 16th notes with open hat accents
-    auto& p3 = g_project.phrases[3];
+    auto& p3 = project.phrases[3];
     for (int s = 0; s < seq::PHRASE_STEPS; ++s) {
         p3.steps[s].note = 62;          // D-4 = pad 2 = hat-cls
         p3.steps[s].instrument = 2;
@@ -663,17 +675,17 @@ static void setup_demo() {
     p3.steps[15].velocity = 100;
 
     // chains: 0=bass, 1=kick, 2=snare, 3=hat
-    g_project.chains[1].rows[0].phrase = 1;
-    g_project.chains[2].rows[0].phrase = 2;
-    g_project.chains[3].rows[0].phrase = 3;
+    project.chains[1].rows[0].phrase = 1;
+    project.chains[2].rows[0].phrase = 2;
+    project.chains[3].rows[0].phrase = 3;
 
     // song row 0 - all 4 tracks together
-    g_project.song.rows[0].chain[0] = 0;     // T0 = bass
-    g_project.song.rows[0].chain[1] = 1;     // T1 = kick
-    g_project.song.rows[0].chain[2] = 2;     // T2 = snare
-    g_project.song.rows[0].chain[3] = 3;     // T3 = hat
-    g_project.song.bpm = 110;                // breakbeat vibe
-    g_project.song.groove = 6;
+    project.song.rows[0].chain[0] = 0;     // T0 = bass
+    project.song.rows[0].chain[1] = 1;     // T1 = kick
+    project.song.rows[0].chain[2] = 2;     // T2 = snare
+    project.song.rows[0].chain[3] = 3;     // T3 = hat
+    project.song.bpm = 110;                // breakbeat vibe
+    project.song.groove = 6;
 }
 
 // === edge-trigger input with repeat ===
@@ -809,7 +821,7 @@ int main() {
     // ptmu - battery level / charging status (for the header indicator)
     ptmuInit();
 
-    setup_demo();
+    setup_demo(g_project);
 
     // All lazy DSP tables used to be built by the first sounding note while the
     // audio worker held its realtime lock. Warm them before starting NDSP so the
@@ -1152,33 +1164,55 @@ int main() {
         prev_touch = touch_now;
 
         // handle save/load by flags from the ui
-        if (app.consume_save_request()) { save_full_project(); app.dirty = false; }
+        if (app.consume_save_request()) {
+            if (save_full_project()) {
+                app.mark_project_clean();
+                std::snprintf(app.slot_status, sizeof(app.slot_status), "session saved");
+            } else {
+                std::snprintf(app.slot_status, sizeof(app.slot_status), "SAVE FAILED - CHECK SD");
+            }
+        }
         if (app.consume_load_request()) {
             // never load over a running sequencer: the player walks phrase/
             // chain/instrument data every tick on the worker thread
             if (player.playing()) player.stop();
-            load_full_project();
-            app.reset_history();   // records index into the OLD project's banks
-            app.dirty = false;
+            if (load_full_project()) {
+                app.reset_history();   // records index into the OLD project's banks
+                app.mark_project_clean();
+                app.sync_mixer_from_song();
+            } else {
+                std::snprintf(app.slot_status, sizeof(app.slot_status), "LOAD FAILED - SESSION UNCHANGED");
+            }
         }
         if (app.consume_reset_request()) {
             // stop playback, zero the project, restart the demo
             if (player.playing()) player.stop();
-            std::memset(&g_project, 0, sizeof(g_project));
-            // reconstruct default initialization via placement-new
-            new (&g_project) seq::Project();
-            setup_demo();
-            app.reset_history();
-            app.dirty = false;   // fresh demo is clean, no autosave
+            // replace the live project with a normally constructed value.
+            auto* fresh = new (std::nothrow) seq::Project();
+            if (fresh) {
+                setup_demo(*fresh);
+                {
+                    audio::Mixer::LockGuard _g(g_mixer);
+                    g_project = *fresh;
+                }
+                delete fresh;
+                app.reset_history();
+                app.mark_project_clean();   // fresh demo is clean, no autosave
+                app.sync_mixer_from_song();
+            } else {
+                std::snprintf(app.slot_status, sizeof(app.slot_status), "NEW FAILED - OUT OF MEMORY");
+            }
         }
         if (app.consume_render_request()) {
             // pause realtime audio briefly, render, resume
             // (realtime audio uses g_mixer and the live player, render has its own xmix/xplayer - no conflict)
             char rel[40] = {0};
             bool ok = render_song_to_wav(rel, sizeof(rel));
-            if (ok) std::snprintf(app.slot_status, sizeof(app.slot_status),
-                                  "rendered -> renders/%s", rel);
-            else    std::snprintf(app.slot_status, sizeof(app.slot_status),
+            if (ok) {
+                std::snprintf(app.slot_status, sizeof(app.slot_status),
+                              "rendered -> renders/%s", rel);
+                app.notify_project_motion(-1, 6);
+            } else    std::snprintf(app.slot_status, sizeof(app.slot_status),
                                   "RENDER FAILED (empty song?)");
         }
 
@@ -1193,15 +1227,28 @@ int main() {
                         if (slot_load(slot)) {
                             std::snprintf(app.slot_status, sizeof(app.slot_status),
                                           "loaded slot %02X", slot);
-                            app.dirty = false;
+                            app.mark_project_clean();
+                        } else if (!slot_exists(slot)) {
+                            // An explicitly empty slot means "blank project".
+                            auto* blank = new (std::nothrow) seq::Project();
+                            if (blank) {
+                                {
+                                    audio::Mixer::LockGuard _g(g_mixer);
+                                    g_project = *blank;
+                                }
+                                delete blank;
+                                std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                              "BLANKED (slot %02X was empty)", slot);
+                                app.mark_project_clean();
+                            } else {
+                                std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                              "LOAD FAILED - OUT OF MEMORY");
+                                break;
+                            }
                         } else {
-                            // empty slot - reset live to a blank project
-                            // (sample bank stays - it's a singleton, not part of Project)
-                            std::memset(&g_project, 0, sizeof(g_project));
-                            new (&g_project) seq::Project();
                             std::snprintf(app.slot_status, sizeof(app.slot_status),
-                                          "BLANKED (slot %02X was empty)", slot);
-                            app.dirty = false;
+                                          "LOAD FAILED - SLOT %02X UNCHANGED", slot);
+                            break;
                         }
                         // either way the Song's mixer block changed - push it into
                         // the engine now, not on the next mixer-screen visit
@@ -1210,25 +1257,43 @@ int main() {
                         // that no longer exist in this arrangement
                         app.reset_history();
                         break;
-                    case ui::App::ProjAction::Save:
-                        slot_save(slot);
-                        std::snprintf(app.slot_status, sizeof(app.slot_status),
-                                      "saved to slot %02X", slot);
-                        break;
-                    case ui::App::ProjAction::New:
-                        // create a fresh demo in this slot without affecting live
-                        // important: don't copy g_project onto the stack (62kb)! use the heap
-                        {
-                            auto* save = new seq::Project(g_project);
-                            std::memset(&g_project, 0, sizeof(g_project));
-                            new (&g_project) seq::Project();
-                            setup_demo();
-                            slot_save(slot);
-                            g_project = *save;
-                            delete save;
+                    case ui::App::ProjAction::Save: {
+                        const bool project_ok = slot_save(slot);
+                        const bool samples_ok = save_changed_samples();
+                        if (project_ok && samples_ok) {
+                            std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                          "saved to slot %02X", slot);
+                            // Contract: a successful explicit save means the current
+                            // project is safely persisted, regardless of session.tr3d.
+                            app.mark_project_clean();
+                        } else {
+                            std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                          "SAVE FAILED - SLOT %02X", slot);
                         }
-                        std::snprintf(app.slot_status, sizeof(app.slot_status),
-                                      "new demo in slot %02X", slot);
+                        break;
+                    }
+                    case ui::App::ProjAction::New:
+                        // Build and save a temporary demo; never replace the live
+                        // project just to populate another slot.
+                        {
+                            auto* demo = new (std::nothrow) seq::Project();
+                            bool ok = false;
+                            if (demo) {
+                                setup_demo(*demo);
+                                char path[80];
+                                slot_path(slot, path, sizeof(path));
+                                mkdir("sdmc:/3ds", 0777);
+                                mkdir(SAMPLE_DIR, 0777);
+                                ok = seq::save_project(*demo, path);
+                            }
+                            delete demo;
+                            if (ok)
+                                std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                              "new demo in slot %02X", slot);
+                            else
+                                std::snprintf(app.slot_status, sizeof(app.slot_status),
+                                              "NEW FAILED - SLOT %02X", slot);
+                        }
                         break;
                     case ui::App::ProjAction::Delete:
                         slot_delete(slot);
@@ -1239,6 +1304,8 @@ int main() {
                 }
                 // refresh slot scan
                 refresh_slots(app);
+                if (!std::strstr(app.slot_status, "FAILED"))
+                    app.notify_project_motion(slot, (uint8_t)act);
             }
         }
 
@@ -1367,7 +1434,7 @@ int main() {
     audio.shutdown();
     // autosave to session.tr3d - ONLY if the user changed something
     // (otherwise a fresh setup_demo would endlessly get stuck on old data)
-    if (app.dirty) {
+    if (app.project_dirty()) {
         save_full_project();
     }
     C2D_Fini();

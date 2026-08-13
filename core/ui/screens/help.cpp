@@ -74,18 +74,18 @@ static const char* const pg_phrase[] = {
     "PHRASE VIEW - the note grid",
     "",
     "columns: NOTE INST VEL FX1 FX2 FX3",
-    "",
     "A on empty  insert last-entered note",
     "A/B         value +-1 (notes snap to key)",
     "X/Y         value +-12 (octave) / big step",
     "SELECT      note: preview  inst: open inst",
     "            FX col: command list picker",
     "R+A cell  R+B step  R+Y whole phrase",
-    "R+X         PHRASE TOOLS (selection or all)",
+    "R+X         TOOLS: transforms + seeded GEN",
+    "  EUC density human ratchet mutate random",
+    "  chance/every; same seed = same result",
     "ZL+SELECT   block select (A = copy, B = out)",
     "ZL+X / ZL+Y copy / paste step or block",
     "L+l/r       previous / next phrase",
-    "",
     "FX cells: 3-letter command + hex value.",
     "the side panel (right third) decodes it all:",
     "instrument, its envelope, all 3 FX in words.",
@@ -243,6 +243,7 @@ enum : int {
 };
 
 void App::open_help() {
+    help_closing_ = false;
     // land on the page matching the current screen
     switch (screen_) {
         case Screen::Song:       help_page_ = PG_READ;   break;   // mute / END markers
@@ -253,13 +254,15 @@ void App::open_help() {
         default:                 help_page_ = PG_BASICS; break;
     }
     help_on_ = true;
+    help_closing_ = false;
     help_frame_ = frame_;
 }
 
 void App::update_help(const InputState& in) {
-    if (in.b || in.start) { help_on_ = false; return; }
-    if (in.left  || in.up)   help_page_ = (help_page_ + N_PAGES - 1) % N_PAGES;
-    if (in.right || in.down || in.a) help_page_ = (help_page_ + 1) % N_PAGES;
+    if (help_closing_) return;
+    if (in.b || in.start) { begin_overlay_close(help_closing_); return; }
+    if (in.left  || in.up)   help_page_ = wrap_index(help_page_, -1, N_PAGES);
+    if (in.right || in.down || in.a) help_page_ = wrap_index(help_page_, +1, N_PAGES);
 }
 
 void App::draw_help(Draw& d) {
@@ -278,13 +281,24 @@ void App::draw_help(Draw& d) {
 
     d.rect(HLP_X - 2, HLP_Y - 2, HLP_W + 4, HLP_H + 4, pal::BG_HI);
     d.rect(HLP_X, HLP_Y, HLP_W, HLP_H, pal::PANEL);
+    if (help_closing_) {
+        uint32_t ca = frame_ - overlay_close_frame_;
+        uint8_t a = (uint8_t)clamp_int((int)ca * 52, 0, 210);
+        d.rect(HLP_X, HLP_Y, HLP_W, HLP_H, with_alpha(pal::BG, a));
+        int in = (int)motion_in(ca, 4) * 18 / 255;
+        d.corner_brackets(HLP_X + in, HLP_Y + in / 2, HLP_W - in * 2, HLP_H - in,
+                          with_alpha(pal::CURSOR, (uint8_t)(220 - a)), 6, 1);
+        return;
+    }
 
     const HelpPage& pg = kPages[help_page_];
     d.text(HLP_X + 6, HLP_Y + 5, "MANUAL", pal::HEADER);
     d.text(HLP_X + 56, HLP_Y + 5, pg.title, pal::FG);
     {
         char pb[8];
-        std::snprintf(pb, sizeof(pb), "%d/%d", help_page_ + 1, N_PAGES);
+        // help_page_ is bounded by N_PAGES; the cast tells the optimiser that too,
+        // otherwise -Wformat-truncation assumes a full int and warns.
+        std::snprintf(pb, sizeof(pb), "%d/%d", (int)(help_page_ + 1) & 0xFF, N_PAGES & 0xFF);
         d.text(HLP_X + HLP_W - 28, HLP_Y + 5, pb, pal::FG_DIM);
     }
     d.rect(HLP_X + 4, HLP_Y + HLP_HDR - 1, HLP_W - 8, 1, pal::GRID);
@@ -322,17 +336,17 @@ void App::draw_help(Draw& d) {
 
 bool App::help_touch(int x, int y) {
     // header row = close
-    if (y < HLP_Y + HLP_HDR) { help_on_ = false; return true; }
+    if (y < HLP_Y + HLP_HDR) { begin_overlay_close(help_closing_); return true; }
     // footer: left third prev, right third next, middle close
     if (y >= HLP_FOOT_Y - 3) {
-        if (x < HLP_X + HLP_W / 3)          help_page_ = (help_page_ + N_PAGES - 1) % N_PAGES;
-        else if (x >= HLP_X + 2 * HLP_W / 3) help_page_ = (help_page_ + 1) % N_PAGES;
-        else                                 help_on_ = false;
+        if (x < HLP_X + HLP_W / 3)          help_page_ = wrap_index(help_page_, -1, N_PAGES);
+        else if (x >= HLP_X + 2 * HLP_W / 3) help_page_ = wrap_index(help_page_, +1, N_PAGES);
+        else                                 begin_overlay_close(help_closing_);
         return true;
     }
     // body: left/right half = page flip (fast thumbing)
-    if (x < HLP_X + HLP_W / 2) help_page_ = (help_page_ + N_PAGES - 1) % N_PAGES;
-    else                       help_page_ = (help_page_ + 1) % N_PAGES;
+    if (x < HLP_X + HLP_W / 2) help_page_ = wrap_index(help_page_, -1, N_PAGES);
+    else                       help_page_ = wrap_index(help_page_, +1, N_PAGES);
     return true;
 }
 

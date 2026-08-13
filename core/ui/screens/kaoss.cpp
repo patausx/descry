@@ -85,7 +85,7 @@ void App::apply_kaoss_dest(int trk, uint8_t dest, int v) {
             // ~8 bits, so spend most travel there (same curve as the C-stick).
             int bits = (v < 300) ? 16 - v * 8 / 300
                                  : 8 - (v - 300) * 6 / 700;
-            if (bits < 2) bits = 2; if (bits > 16) bits = 16;
+            bits = clamp_int(bits, 2, 16);
             ts.perf_hold |= TS::HOLD_BIT;
             ts.bits = (uint8_t)bits;
             break;
@@ -133,7 +133,6 @@ void App::apply_kaoss() {
         apply_kaoss_dest(t, (uint8_t)kaoss_dest_x_, kaoss_x_);
         apply_kaoss_dest(t, (uint8_t)kaoss_dest_y_, kaoss_y_);
     }
-    dirty = true;
 }
 
 // capture one track's baseline into kaoss_base_[trk]
@@ -146,6 +145,7 @@ void App::kaoss_snapshot(int trk) {
 
 // touch entry (press + move). handles assign buttons, the popup menu and the field.
 void App::kaoss_touch(int x, int y, bool is_move) {
+    if (kaoss_menu_closing_) return;
     // === popup menu open: it owns all touches (press only) ===
     if (kaoss_menu_ != 0) {
         if (is_move) return;
@@ -157,12 +157,13 @@ void App::kaoss_touch(int x, int y, bool is_move) {
             if (x >= bx && x < bx + MENU_CW - 4 && y >= by && y < by + MENU_CH - 4) {
                 if (kaoss_menu_ == 1) kaoss_dest_x_ = (KaossDest)i;
                 else                  kaoss_dest_y_ = (KaossDest)i;
-                kaoss_menu_ = 0;
-                mark_dirty();
+                kaoss_menu_closing_ = kaoss_menu_;
+                overlay_close_frame_ = frame_;
                 return;
             }
         }
-        kaoss_menu_ = 0;   // tap outside the grid = close without assigning
+        kaoss_menu_closing_ = kaoss_menu_;
+        overlay_close_frame_ = frame_;   // tap outside closes without assigning
         return;
     }
 
@@ -170,12 +171,12 @@ void App::kaoss_touch(int x, int y, bool is_move) {
     if (!is_move && x < AX_W && y >= KB_Y) {
         if (y >= KB_Y + 2 * AX_H) {
             // TRK/ALL toggle. mid-gesture switch would orphan baselines - ignore then.
-            if (!kaoss_active_) { kaoss_all_ = !kaoss_all_; mark_dirty(); }
+            if (!kaoss_active_) kaoss_all_ = !kaoss_all_;
             return;
         }
         kaoss_menu_ = (y < KB_Y + AX_H) ? 1 : 2;   // top = X, bottom = Y
+        kaoss_menu_closing_ = 0;
         kaoss_menu_frame_ = frame_;
-        mark_dirty();
         return;
     }
     if (x < KF_X || y < KF_Y) return;
@@ -183,14 +184,12 @@ void App::kaoss_touch(int x, int y, bool is_move) {
     // normalize field position: X right = 1000, Y up = 1000
     int nx = (x - KF_X) * 1000 / (KF_W - 1);
     int ny = (KF_Y + KF_H - 1 - y) * 1000 / (KF_H - 1);
-    if (nx < 0) nx = 0; if (nx > 1000) nx = 1000;
-    if (ny < 0) ny = 0; if (ny > 1000) ny = 1000;
+    nx = clamp_int(nx, 0, 1000);
+    ny = clamp_int(ny, 0, 1000);
 
     if (!kaoss_active_) {
         // gesture start: grab the target track(s) + snapshot baselines
-        int trk = song_col_;
-        if (trk < 0) trk = 0;
-        if (trk >= audio::NUM_TRACKS) trk = audio::NUM_TRACKS - 1;
+        int trk = clamp_int(song_col_, 0, audio::NUM_TRACKS - 1);
         kaoss_track_ = trk;
         kaoss_grab_mask_ = kaoss_all_ ? 0xFF : (uint8_t)(1u << trk);
         for (int t = 0; t < audio::NUM_TRACKS; ++t)
@@ -208,7 +207,7 @@ void App::kaoss_touch(int x, int y, bool is_move) {
     // push the finger trail (screen px)
     kaoss_trail_x_[kaoss_trail_pos_] = (int16_t)x;
     kaoss_trail_y_[kaoss_trail_pos_] = (int16_t)y;
-    kaoss_trail_pos_ = (uint8_t)((kaoss_trail_pos_ + 1) % KAOSS_TRAIL);
+    kaoss_trail_pos_ = (uint8_t)wrap_index(kaoss_trail_pos_, +1, KAOSS_TRAIL);
     if (kaoss_trail_len_ < KAOSS_TRAIL) ++kaoss_trail_len_;
 
     apply_kaoss();
@@ -369,6 +368,15 @@ void App::draw_kaoss(Draw& d) {
     if (kaoss_menu_ != 0) {
         // unfold: veil fades in + rows appear with a stagger (2 frames per row)
         uint32_t age = frame_ - kaoss_menu_frame_;
+        if (kaoss_menu_closing_) {
+            uint32_t ca = frame_ - overlay_close_frame_;
+            uint8_t a = (uint8_t)clamp_int(180 - (int)ca * 42, 0, 180);
+            d.rect(KF_X, KF_Y, KF_W, KF_H, with_alpha(0xFF000000, a));
+            int in = (int)motion_in(ca, 4) * 14 / 255;
+            d.corner_brackets(KF_X + in, KF_Y + in / 2, KF_W - in * 2, KF_H - in,
+                              with_alpha(pal::CURSOR, a), 6, 1);
+            return;
+        }
         constexpr uint32_t VEIL_IN = 5;
         uint8_t va = (age < VEIL_IN) ? (uint8_t)(160 * (age + 1) / VEIL_IN) : 160;
         d.rect(KF_X, KF_Y, KF_W, KF_H, with_alpha(0xFF000000, va));
