@@ -4,7 +4,7 @@
 
 # host-only targets (`make tests`) build with the system g++ and must work on a
 # machine without the 3DS toolchain - don't demand DEVKITARM for them.
-HOST_ONLY_GOALS := tests
+HOST_ONLY_GOALS := tests demo
 ifeq ($(filter-out $(HOST_ONLY_GOALS),$(or $(MAKECMDGOALS),all)),)
   HOST_ONLY := 1
 endif
@@ -146,6 +146,29 @@ tests:
 	done; \
 	if [ $$fail -ne 0 ]; then echo "host tests FAILED"; exit 1; fi; \
 	echo "all host tests passed"
+
+# --- demo content -----------------------------------------------------------
+# Builds the shipped demo project(s) with the host compiler: a .tr3d project
+# PLUS the .s16 samples it references (a .tr3d carries no audio - see
+# docs/BUGS.md B3). Output lands in dist/demo/, ready to zip into a release or
+# copy to sdmc:/3ds/descry/.
+#   make demo
+DEMO_OUT  := dist/demo
+DEMO_CORE := core/sequencer/project.cpp core/sequencer/serialize.cpp \
+             core/synth/wavsynth.cpp core/synth/sampler.cpp \
+             core/synth/drumkit.cpp core/synth/fm.cpp \
+             core/synth/dsn_synth.cpp core/synth/wavetable.cpp \
+             core/synth/wav_loader.cpp core/synth/drum_gen.cpp \
+             core/synth/dsn_presets.cpp core/synth/fm_presets.cpp \
+             core/audio/fixed.cpp
+
+demo:
+	@mkdir -p $(DEMO_OUT) build
+	@$(HOST_CXX) -std=c++17 -O2 -I. -o build/gen_jungle tools/gen_jungle.cpp $(DEMO_CORE)
+	@./build/gen_jungle $(DEMO_OUT)
+	@echo "demo content in $(DEMO_OUT)/"
+
+.PHONY: tests demo
 
 #---------------------------------------------------------------------------------
 else
