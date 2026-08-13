@@ -171,7 +171,8 @@ void App::draw_table(Draw& d) {
         const auto& row = project_.tables[cur_table_].rows[table_row_];
         uint8_t cmd = row.fx[slot].cmd;
         char sl[5];
-        std::snprintf(sl, sizeof(sl), "FX%d", slot + 1);
+        // slot is table_col_/2 over a fixed column count: one digit, always.
+        std::snprintf(sl, sizeof(sl), "FX%d", (slot + 1) & 0xF);
         d.text(8, HY, sl, pal::FG_DIM, 1);
         if (cmd == 0) {
             char hint[52];

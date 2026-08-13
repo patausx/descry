@@ -1867,8 +1867,11 @@ void App::draw_instrument(Draw& d) {
         d.text(396 - (int)std::strlen(slot_hint) * 6, Y0 + 12, slot_hint, pal::GRID);
     }
 
-    static const char* type_names[] = {"NONE", "WAVSYN", "SAMPLER", "DRUMKIT", "FMSYN", "DSN", "GRAN"};
-    static const char* shape_names[] = {"SINE", "SAW", "SQUAR", "TRI", "NOIS"};
+    // one entry per InstrumentType, INSTRUMENT_TYPE_COUNT of them. "GRAN" used to
+    // sit at the end advertising an engine that does not exist in the enum.
+    static const char* type_names[] = {"NONE", "WAVSYN", "SAMPLER", "DRUMKIT", "FMSYN", "DSN"};
+    static_assert((int)(sizeof(type_names) / sizeof(type_names[0])) == seq::INSTRUMENT_TYPE_COUNT,
+                  "type_names must cover exactly InstrumentType");
     static const char* note_names[12] = {"C ","C#","D ","D#","E ","F ","F#","G ","G#","A ","A#","B "};
 
     auto fmt_note = [&](uint8_t n, char* dst, size_t cap) {
@@ -2528,7 +2531,7 @@ void App::draw_env_popup(Draw& d, uint32_t atk, uint32_t dec, fx::q15 sus,
     for (int x = X0; x < X0 + W; x += 4)
         d.rect(x, ys, 2, 1, pal::GRID);
 
-    const int xa = X0, xd = X0 + wa, xs = xd + wd, xr = xs + ws;
+    const int xd = X0 + wa, xs = xd + wd, xr = xs + ws;
     env_curve(d, X0, Yt, W, H, atk, dec, sus, rel, focus, pal::CURSOR, pal::PLAY);
     // gate-off tick at the sustain/release seam
     d.rect(xr, Yt, 1, H, with_alpha(pal::FG_DIM, 120));
