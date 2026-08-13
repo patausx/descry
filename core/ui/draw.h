@@ -15,7 +15,7 @@ namespace pal {
     inline Color BG       = 0xFF313432;  // background
     inline Color BG_HI    = 0xFF323E42;  // zebra/header fill
     inline Color PANEL    = 0xFF0A0A0E;  // deep panel (scope/pads/kaoss field bg)
-    inline Color GRID     = 0xFF454B4B;  // grid lines / inactive borders
+    inline Color GRID     = 0xFF39403E;  // quiet structure / inactive borders
     inline Color FG       = 0xFFBCB7A5;  // text
     inline Color FG_DIM   = 0xFF625055;  // dim/empty cells
     inline Color FG_HEX   = 0xFFB4AB8F;  // hex values
