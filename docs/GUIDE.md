@@ -142,9 +142,15 @@ you are watching (a chain can be used by several tracks at once).
 | R+X | open **Phrase Tools**; uses the active selection, otherwise playable phrase |
 | L+left/right | switch to another phrase slot |
 
-**Phrase Tools:** rotate up/down, reverse, transpose ±1/±12, velocity ±8 and
-velocity ramp up/down. choose with up/down (or C-stick), A applies and B cancels.
-Every transform is a single undo/redo operation.
+**Phrase Tools:** rotate up/down, reverse, transpose ±1/±12, velocity ±8,
+velocity ramps, plus deterministic generators: Euclidean rhythm, density gate,
+velocity/timing humanize, ratchet fill, scale-aware note mutation/randomization,
+trigger-chance spread and `EVN` cycle distribution. Generators open a parameter page:
+left/right changes amount, X/Y jumps ±8, up/down changes the hexadecimal seed,
+and A applies. The same seed and settings reproduce the same result. Operations use
+the active key/scale, never touch rows outside the selection, and never overwrite
+unrelated FX when all three lanes are occupied. Every transform is a single
+undo/redo operation.
 
 the playhead follows **whatever track is playing this phrase** — not just track 0
 — and `▶T#` at the right edge of the grid names it. if two tracks share the

@@ -43,8 +43,9 @@ old 3DS is not supported.
 - live mode: quantized chain launch per track, solo pads
 - clone (deep copy) for chains and phrases, undo/redo (including whole-instrument
   history for preset loads), block selection copy/paste
-- Phrase Tools over the whole playable phrase or selected rows: rotate, reverse,
-  transpose, octave shift and velocity shaping, each as one undo operation
+- Phrase Tools over the whole playable phrase or selected rows: transforms plus
+  seeded Euclidean rhythms, density, humanize, ratchets, scale-aware mutation and
+  probability/condition fills; every result is one undo operation
 
 **instruments** (all fixed-point, 32 kHz)
 - wavsynth — classic waves with unison/detune, plus user wavetables
