@@ -125,7 +125,8 @@ TEST_CORE := core/synth/wavetable.cpp core/synth/sampler.cpp core/synth/wav_load
              core/synth/fm_presets.cpp core/synth/wave_presets.cpp \
              core/synth/dsn_presets.cpp \
              core/audio/mixer.cpp core/sequencer/player.cpp \
-             core/sequencer/undo.cpp core/sequencer/project.cpp
+             core/sequencer/undo.cpp core/sequencer/project.cpp \
+             core/sequencer/phrase_gen.cpp
 TEST_OUT  := build/hosttests
 
 tests:
