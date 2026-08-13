@@ -82,9 +82,11 @@ public:
 
     // Undo the most recent edit (writes `before` back). Returns false if nothing to undo.
     // On success, fills out_kind/out_a/out_b so the UI can move the cursor to the change.
-    bool undo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b);
+    bool undo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b,
+              uint16_t* step_mask = nullptr);
     // Redo. Returns false if nothing to redo.
-    bool redo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b);
+    bool redo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b,
+              uint16_t* step_mask = nullptr);
 
     bool can_undo() const { return count_ > 0; }
     bool can_redo() const { return redo_ > 0; }
@@ -119,7 +121,7 @@ public:
     // capture the current state of instrument `id` as the pending `before`
     void snapshot(const Project& p, uint16_t id);
     // compare against the live instrument and push a record if anything changed
-    void commit(const Project& p, uint16_t id, uint32_t frame,
+    bool commit(const Project& p, uint16_t id, uint32_t frame,
                 uint32_t coalesce_frames = 30);
 
     // restore. out_id receives the instrument the UI should jump to.

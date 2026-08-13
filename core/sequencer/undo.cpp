@@ -104,13 +104,17 @@ void UndoStack::record(EditKind kind, uint16_t a, uint16_t b,
     redo_ = 0;
 }
 
-bool UndoStack::undo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b) {
+bool UndoStack::undo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b,
+                     uint16_t* step_mask) {
     if (count_ == 0) return false;
+    if (step_mask) *step_mask = 0;
     const uint16_t group = ring_[prev(head_)].group;
     do {
         int idx = prev(head_);
         const EditRecord& rec = ring_[idx];
         write_cell(p, rec.kind, rec.a, rec.b, rec.before);
+        if (step_mask && rec.kind == EditKind::Step && rec.b < PHRASE_STEPS)
+            *step_mask |= (uint16_t)(1u << rec.b);
         out_kind = rec.kind; out_a = rec.a; out_b = rec.b;
         head_ = idx;
         --count_;
@@ -119,12 +123,16 @@ bool UndoStack::undo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& 
     return true;
 }
 
-bool UndoStack::redo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b) {
+bool UndoStack::redo(Project& p, EditKind& out_kind, uint16_t& out_a, uint16_t& out_b,
+                     uint16_t* step_mask) {
     if (redo_ == 0) return false;
+    if (step_mask) *step_mask = 0;
     const uint16_t group = ring_[head_].group;
     do {
         const EditRecord& rec = ring_[head_];
         write_cell(p, rec.kind, rec.a, rec.b, rec.after);
+        if (step_mask && rec.kind == EditKind::Step && rec.b < PHRASE_STEPS)
+            *step_mask |= (uint16_t)(1u << rec.b);
         out_kind = rec.kind; out_a = rec.a; out_b = rec.b;
         head_ = next(head_);
         ++count_;
@@ -145,13 +153,16 @@ void InstUndoStack::snapshot(const Project& p, uint16_t id) {
     snap_taken_ = true;
 }
 
-void InstUndoStack::commit(const Project& p, uint16_t id, uint32_t frame,
+bool InstUndoStack::commit(const Project& p, uint16_t id, uint32_t frame,
                            uint32_t coalesce_frames) {
-    if (!snap_taken_ || id != snap_id_ || id >= MAX_INSTRUMENTS) { snap_taken_ = false; return; }
+    if (!snap_taken_ || id != snap_id_ || id >= MAX_INSTRUMENTS) {
+        snap_taken_ = false;
+        return false;
+    }
     snap_taken_ = false;
     const Instrument& now = p.instruments[id];
     // no net change -> nothing to remember (value clamped at its limit, etc.)
-    if (std::memcmp(&snap_, &now, sizeof(Instrument)) == 0) return;
+    if (std::memcmp(&snap_, &now, sizeof(Instrument)) == 0) return false;
 
     // coalesce: same instrument, recent -> extend the existing record's `after`,
     // so holding A through 12 presets is ONE undo, not twelve.
@@ -164,7 +175,7 @@ void InstUndoStack::commit(const Project& p, uint16_t id, uint32_t frame,
                 head_ = prev(head_);
                 --count_;
             }
-            return;
+            return true;
         }
     }
 
@@ -176,6 +187,7 @@ void InstUndoStack::commit(const Project& p, uint16_t id, uint32_t frame,
     head_ = next(head_);
     if (count_ < CAP) ++count_;
     redo_ = 0;
+    return true;
 }
 
 bool InstUndoStack::undo(Project& p, uint16_t& out_id) {
