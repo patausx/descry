@@ -7,6 +7,52 @@
 
 namespace trackr::ui {
 
+// === small edit primitives ===
+// Keep value editing explicit at the call site while centralizing the three
+// repetitive policies used throughout the UI: clamp, clamped bump, and wrap.
+inline constexpr int clamp_int(int value, int lo, int hi) {
+    return value < lo ? lo : (value > hi ? hi : value);
+}
+
+template<class T>
+inline bool bump_clamped(T& value, int delta, int lo, int hi) {
+    const int old = static_cast<int>(value);
+    const int64_t sum = static_cast<int64_t>(old) + delta;
+    const int next = sum < lo ? lo : (sum > hi ? hi : static_cast<int>(sum));
+    if (next == old) return false;
+    value = static_cast<T>(next);
+    return true;
+}
+
+inline constexpr int wrap_index(int value, int delta, int count) {
+    if (count <= 0) return 0;
+    int64_t wrapped = (static_cast<int64_t>(value) + delta) % count;
+    return static_cast<int>(wrapped < 0 ? wrapped + count : wrapped);
+}
+
+// === tiny integer-only motion primitives ===
+// All UI animation uses these 0..255 curves: no float, trig, heap or textures.
+inline uint8_t motion_linear(uint32_t age, uint32_t duration) {
+    if (!duration || age >= duration) return 255;
+    return (uint8_t)(age * 255 / duration);
+}
+inline uint8_t motion_out(uint32_t age, uint32_t duration) {
+    const int t = motion_linear(age, duration);
+    const int inv = 255 - t;
+    return (uint8_t)(255 - inv * inv / 255); // quadratic ease-out
+}
+inline uint8_t motion_in(uint32_t age, uint32_t duration) {
+    const int t = motion_linear(age, duration);
+    return (uint8_t)(t * t / 255);           // quadratic ease-in
+}
+inline int motion_lerp(int from, int to, uint8_t t) {
+    return from + (to - from) * (int)t / 255;
+}
+inline uint8_t motion_stagger(uint32_t age, int item, int delay, uint32_t duration) {
+    const uint32_t start = item > 0 ? (uint32_t)item * (uint32_t)delay : 0;
+    return age <= start ? 0 : motion_out(age - start, duration);
+}
+
 // === beat glow: breathing gradient for playhead strips ===
 // instead of a uniform alpha blink, a bright edge FLOWS across the strip after
 // each step change and dissolves - the row breathes with the music.
@@ -123,7 +169,7 @@ inline void env_live_dot(Draw& d, int X0, int Yt, int W, int H,
     const int YB = Yt + H;
     const EnvGeom g = env_geom(W, atk, dec, rel);
     const int xa = X0, xd = X0 + g.wa, xs = xd + g.wd, xr = xs + g.ws;
-    int32_t lv = level; if (lv < 0) lv = 0; if (lv > 32767) lv = 32767;
+    int32_t lv = clamp_int(level, 0, 32767);
     int32_t sus = sus_q15 < 0 ? 0 : sus_q15;
     int lx;
     switch (stage) {
@@ -133,7 +179,7 @@ inline void env_live_dot(Draw& d, int X0, int Yt, int W, int H,
         case 2: {  // decay: ONE -> sus
             int32_t span = 32767 - sus;
             int32_t p = span > 0 ? (32767 - lv) * 100 / span : 100;
-            if (p < 0) p = 0; if (p > 100) p = 100;
+            p = clamp_int(p, 0, 100);
             lx = xd + g.wd * p / 100;
             break;
         }
@@ -143,14 +189,14 @@ inline void env_live_dot(Draw& d, int X0, int Yt, int W, int H,
         default: {  // release: level -> 0 (sustain as the reference height)
             int32_t ref = sus > 0 ? sus : 32767;
             int32_t p = 100 - (int32_t)((int64_t)lv * 100 / ref);
-            if (p < 0) p = 0; if (p > 100) p = 100;
+            p = clamp_int(p, 0, 100);
             lx = xr + g.wr * p / 100;
             break;
         }
     }
     int ly = YB - (int)((int64_t)lv * H / 32767);
-    if (lx < X0) lx = X0; if (lx > X0 + W - 1) lx = X0 + W - 1;
-    if (ly < Yt) ly = Yt; if (ly > YB) ly = YB;
+    lx = clamp_int(lx, X0, X0 + W - 1);
+    ly = clamp_int(ly, Yt, YB);
     d.rect(lx - 2, ly - 2, 5, 5, with_alpha(pal::CURSOR, (uint8_t)(60 + (breath >> 2))));
     d.rect(lx - 1, ly - 1, 3, 3, pal::FLASH);
 }
