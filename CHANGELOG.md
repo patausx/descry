@@ -11,6 +11,8 @@ with binaries, checksums and the long-form notes.
 
 ## [unreleased]
 
+## [1.0.6] — 2026-08-15
+
 ### added
 - **generative Phrase Tools** — Euclidean rhythms, density gating, humanize,
   ratchets, scale-aware mutation, random notes, trigger-chance spread and `EVN`
@@ -18,9 +20,16 @@ with binaries, checksums and the long-form notes.
   an explicit seed, so the same phrase + settings reproduce the same bars; they
   stay inside the selection, respect the active key/scale, never clobber
   unrelated FX, and each result is a single undo
+- **IRONLUNG flagship demo** — a copyright-clean 174 BPM jungle track with a
+  procedural two-bar break sliced into 32 chromatic chops, rearranged with rolls
+  and reverse fills, plus reese bass, sub, pads, stabs and sidechain ducking. the
+  release bundle includes both the project and its required sample audio
+- **analog editing controls** — the circle pad accelerates movement through the
+  Song view and scrubs/zooms the sampler window; the C-stick acts as a relative
+  fine/coarse value encoder
 - **continuous integration** — every push and pull request runs the host test
-  suite and a full devkitARM build; the resulting `descry.3dsx` is uploaded as
-  a build artifact
+  suite, builds the IRONLUNG bundle and performs a full devkitARM build; both the
+  demo and `descry.3dsx` are uploaded as artifacts
 - this changelog
 
 ### fixed
@@ -28,10 +37,20 @@ with binaries, checksums and the long-form notes.
   shared boundary derived from its longest chain. shorter chains loop inside the
   row, `EMPTY` cells wait silently, and `song_wrapped()` can no longer fire early
   from an unused track and truncate an offline render
+- **WAV export now renders the complete mix and arrangement** — channel faders,
+  master volume, mutes, delay/reverb and sidechain ducking match live playback;
+  long rests survive, songs run to their shared end instead of a premature track
+  boundary or 60-second cutoff, and a roughly three-second FX tail is preserved
+- track mutes persist with the project; pressing PLAY and leaving solo mode no
+  longer discard them
+- phrase and chain playheads follow the track and position actually sounding,
+  including phrase boundaries and non-zero tracks, instead of reading one step
+  ahead or assuming track 0
+- whole-instrument edits, preset loads, type switches and clones are undoable;
+  loading or replacing a project clears old history instead of letting undo
+  splice data from the previous project
 - **IRONLUNG no longer collides with the optional BMT pack** — its procedural
   break owns sample slot 63; the BMT add-on is explicitly limited to slots 32–62
-- the mixer shows `DTIM` in milliseconds instead of exposing the raw 32-frame
-  storage units
 - **the unsaved-changes flag no longer lies** — switching themes, changing the
   scope style, opening a panel or jamming over a saved song marked the *project*
   dirty, so descry asked to save work you never changed. project state and view
@@ -43,8 +62,21 @@ with binaries, checksums and the long-form notes.
   now animate out and stay input-opaque while they do
 - grid lines and inactive borders were drawn brighter than the dim text they
   frame in every theme, so the scaffolding read louder than the notes
+- touch keys, pads, filter tints and confirmation states no longer stay in the
+  cretaceous palette after switching themes
+- arrangement edits now set the unsaved flag; mute/solo state, the Song end and
+  the active playhead owner are visible where they matter instead of being
+  hidden in another screen
+- the Instrument type table no longer advertises the nonexistent `GRAN` engine,
+  and clean builds are warning-free
 
 ### changed
+- START in the Song view plays from the cursor row; hold L+START to play from
+  the top
+- Song exports stream directly to the SD card with a ten-minute safety cap,
+  rather than buffering the entire WAV in RAM
+- `DTIM` is displayed in milliseconds instead of exposing raw 32-frame storage
+  units
 - undo/redo can report every phrase step a grouped edit restored, so undoing a
   Phrase Tools transform acknowledges all the rows it touched instead of one
 - the UI is split into per-screen translation units (`song`, `chain`, `phrase`,
@@ -158,7 +190,8 @@ five synth engines (wavsynth / 4-op FM / sampler / drumkit / DSN analog voice),
 per-track DSP, delay + reverb, KAOSS-style XY pad, mic sampling, user
 wavetables, 6 colour themes. New 3DS / New 2DS only.
 
-[unreleased]: https://github.com/patausx/descry/compare/v1.0.5...HEAD
+[unreleased]: https://github.com/patausx/descry/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/patausx/descry/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/patausx/descry/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/patausx/descry/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/patausx/descry/compare/v1.0.2...v1.0.3

@@ -102,12 +102,14 @@ grab the [latest release](https://github.com/patausx/descry/releases/latest):
 
 - **CIA** (recommended on CFW) — install `descry.cia` with FBI; the app gets its
   own home menu icon + banner
-- **3DSX** — unzip `descry-v1.0.0.zip`, copy the `3ds` folder to the SD card
-  root, launch from the Homebrew Launcher
+- **3DSX** — copy `descry.3dsx` to `/3ds/descry/descry.3dsx` on the SD
+  card and launch it from the Homebrew Launcher
 - `descry.3ds` — CCI for flashcarts
 
-the zip also carries five demo projects and a starter pack of single-cycle
-wavetables — worth grabbing even if you install the CIA.
+the release also carries the **IRONLUNG** demo bundle: copy
+`project_00.tr3d`, `sample_63.s16` and `sample_63.name` together to
+`/3ds/descry/`. the project file does not embed sample audio, so all three files
+are required.
 
 ## build
 
