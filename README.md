@@ -24,7 +24,7 @@ old 3DS is not supported.
 | --- | --- |
 | ![phrase + fx list](docs/phrase.png) | ![mixer + touch faders](docs/mixer.png) |
 | ![kaoss xy pad](docs/kaoss.png) | ![sampler](docs/sampler.png) |
-| ![fm editor](docs/fm.png) | ![projects + themes](docs/project_themes.png) |
+| ![sample slicing](docs/slices.png) | ![projects + themes](docs/project_themes.png) |
 
 ![oscilloscope](docs/scope.png)
 
