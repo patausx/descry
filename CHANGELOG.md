@@ -24,6 +24,14 @@ with binaries, checksums and the long-form notes.
 - this changelog
 
 ### fixed
+- **song rows no longer desynchronize tracks** — every Song row now has one
+  shared boundary derived from its longest chain. shorter chains loop inside the
+  row, `EMPTY` cells wait silently, and `song_wrapped()` can no longer fire early
+  from an unused track and truncate an offline render
+- **IRONLUNG no longer collides with the optional BMT pack** — its procedural
+  break owns sample slot 63; the BMT add-on is explicitly limited to slots 32–62
+- the mixer shows `DTIM` in milliseconds instead of exposing the raw 32-frame
+  storage units
 - **the unsaved-changes flag no longer lies** — switching themes, changing the
   scope style, opening a panel or jamming over a saved song marked the *project*
   dirty, so descry asked to save work you never changed. project state and view

@@ -12,6 +12,7 @@
 namespace trackr::ui {
 
 namespace {
+    constexpr int AUDIO_SR = 32000;
     constexpr int MX_TRACKS = seq::NUM_TRACKS;       // 8 channel strips
     constexpr int MX_COLS   = MX_TRACKS + 2;         // + master strip + groove zone
     constexpr int MX_MASTER = MX_TRACKS;             // col 8
@@ -357,8 +358,13 @@ void App::draw_mixer(Draw& d) {
             } else {
                 d.rect(MX_X, y + 10, BW, 5, pal::BG_HI);
                 d.rect(MX_X, y + 10, (int)vals[r] * BW / 255, 5, sel ? pal::CURSOR : pal::HEADER);
-                char vb[6];
-                std::snprintf(vb, sizeof(vb), "%3d", vals[r]);
+                char vb[8];
+                if (r == MR_DLY_TIME) {
+                    const int ms = ((int)vals[r] * 32 * 1000 + AUDIO_SR / 2) / AUDIO_SR;
+                    std::snprintf(vb, sizeof(vb), "%3dms", ms ? ms : 1);
+                } else {
+                    std::snprintf(vb, sizeof(vb), "%3d", vals[r]);
+                }
                 d.text(MX_X + BW + 3, y + 8, vb, sel ? pal::FG : pal::FG_DIM);
             }
             if (sel) {

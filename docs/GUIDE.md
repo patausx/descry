@@ -224,6 +224,10 @@ the kaoss pad's DEL/REV destinations. if nothing sends, the wet knobs turn
 silence up and down. same idea for the duck: it needs a source track *and*
 non-zero duck depth on the tracks that should dip.
 
+`DTIM` is shown in milliseconds. Internally the project stores 32-frame
+quanta; at descry's fixed 32 kHz rate one quantum is exactly 1 ms. It is a free
+delay time, not tempo-sync.
+
 `RSIZ / RDMP` shape the reverb itself: `RSIZ` = room size (comb feedback —
 bigger = longer tail), `RDMP` = damping (higher = darker tail). they apply
 globally and save with the project.
