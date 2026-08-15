@@ -54,7 +54,7 @@ def write_s16(dst: Path, pcm: bytes, root: int, chops_count: int) -> None:
 
 
 def slots() -> list[Slot]:
-    # 32 fresh slots from Blu Mar Ten Jungle Jungle, not duplicating the curated 00-31 pack.
+    # 31 add-on slots; sample slot 63 belongs to the shipped IRONLUNG demo.
     return [
         # breaks / amen variants
         Slot(32, 'bmt_let_there_break', 'Breaks/Let There Break.wav', 60, 16),
@@ -90,8 +90,8 @@ def slots() -> list[Slot]:
         Slot(59, 'bmt_little_roller_pad', 'Riffs, Arps & Hits/Little Roller Sharp Pad - 3A.wav', 60, 8),
         Slot(60, 'bmt_night_train_pad', 'Pads/Night Train Pad - 9B.wav', 60, 8),
         Slot(61, 'bmt_soul_atmos', 'FX/Soul Atmos - 7A.wav', 60, 8),
+        # Slot 63 is permanently reserved for the shipped IRONLUNG break.
         Slot(62, 'bmt_stranger_atmos', 'FX/Stranger Atmos - 7A.wav', 60, 8),
-        Slot(63, 'bmt_god_chord_vox_pad', 'Riffs, Arps & Hits/God Chord Vox Pads - 7A.wav', 60, 8),
     ]
 
 
@@ -116,8 +116,8 @@ def find_member(z: zipfile.ZipFile, needle: str) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description='Build descry slots 32-63 from Blu Mar Ten Jungle Jungle')
-    ap.add_argument('-o', '--out', default='dist/3ds_sample_pack_bmt_32_63')
+    ap = argparse.ArgumentParser(description='Build descry BMT add-on slots 32-62 (slot 63 reserved for IRONLUNG)')
+    ap.add_argument('-o', '--out', default='dist/3ds_sample_pack_bmt_32_62')
     args = ap.parse_args()
     out = Path(args.out)
     sd = out / '3ds/descry'
@@ -154,12 +154,12 @@ def main() -> None:
             })
 
     (out / 'MANIFEST.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
-    lines = ['# Blu Mar Ten descry add-on slots 32-63', '', 'Upload only `sample_32.s16`..`sample_63.s16` to avoid overwriting existing slots.', '', '| slot | name | chops | seconds | source |', '|---:|---|---:|---:|---|']
+    lines = ['# Blu Mar Ten descry add-on slots 32-62', '', 'Slot `63` is reserved for the shipped IRONLUNG demo. Upload `sample_32.s16`..`sample_62.s16` only.', '', '| slot | name | chops | seconds | source |', '|---:|---|---:|---:|---|']
     for m in manifest:
         lines.append(f"| {m['slot']:02d} | `{m['name']}` | {m['chops']} | {m['seconds']:.2f} | `{m['member']}` |")
     (out / 'MANIFEST.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     total = sum(m['bytes'] for m in manifest)
-    print(f'wrote slots 32-63 to {out} ({total/1024/1024:.2f} MiB)')
+    print(f'wrote slots 32-62 to {out} ({total/1024/1024:.2f} MiB); slot 63 reserved for IRONLUNG')
 
 if __name__ == '__main__':
     main()

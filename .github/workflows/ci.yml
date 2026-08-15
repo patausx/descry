@@ -28,6 +28,18 @@ jobs:
       - name: make tests
         run: make tests
 
+      - name: build IRONLUNG demo bundle
+        run: make demo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: descry-ironlung-demo
+          path: |
+            dist/demo/project_00.tr3d
+            dist/demo/sample_63.s16
+            dist/demo/sample_63.name
+          if-no-files-found: error
+
   build:
     name: 3dsx build
     runs-on: ubuntu-latest

@@ -6,13 +6,13 @@
 // 2-bar loop at exactly the project tempo) so the demo ships without needing
 // any copyrighted amen.
 //
-// IMPORTANT (see docs/BUGS.md B1): every track must spend the SAME time in a
-// song row. that means every chain is exactly 4 phrases long AND silent tracks
-// get an explicit 4-phrase rest chain - an EMPTY cell is only ONE 16-step row,
-// so a track with a hole races through the song 4x faster than the others.
+// Song playback has a shared row clock: chains may have different nominal
+// lengths, short chains loop inside the row, and EMPTY cells wait silently until
+// the longest chain reaches the common boundary. The explicit 4-phrase rests
+// below are kept as arrangement data, not as a synchronization workaround.
 //
 // build: see docs/ENGINE_NOTES.md ("host-сборка генератора")
-// writes: <outdir>/project_00.tr3d + <outdir>/sample_32.s16 + sample_32.name
+// writes: <outdir>/project_00.tr3d + <outdir>/sample_63.s16 + sample_63.name
 #include "core/sequencer/project.h"
 #include "core/sequencer/serialize.h"
 #include "core/synth/drum_gen.h"
@@ -33,7 +33,7 @@ using namespace trackr::synth;
 // ============================================================================
 constexpr int   BPM        = 174;              // jungle
 constexpr int   SR         = 32000;
-constexpr int   BREAK_SLOT = 32;               // SampleBank slot for the break
+constexpr int   BREAK_SLOT = 63;               // reserved flagship-demo slot
 constexpr int   BREAK_16THS = 32;              // 2 bars of 16ths = 32 slices
 // frames per 16th note. kept in double so the 32 chop markers stay on grid.
 static const double SIXTEENTH = (double)SR * 60.0 / ((double)BPM * 4.0);
@@ -380,7 +380,8 @@ int main(int argc, char** argv) {
     // P17 = intentionally empty (a rest that keeps the grid)
 
     // ======================= CHAINS =======================
-    // EVERY chain is 4 phrases. see docs/BUGS.md B1.
+    // All musical chains happen to span four phrases; the engine no longer
+    // requires this for synchronization.
     auto set_chain = [&](int c, std::initializer_list<int> phs) {
         int r = 0;
         for (int p : phs) proj.chains[c].rows[r++].phrase = (uint8_t)p;
@@ -395,8 +396,7 @@ int main(int argc, char** argv) {
     set_chain(7, {12, 12, 12, 12});      // snare
     set_chain(8, {13, 13, 14, 13});      // pad Am Am F Am
     set_chain(9, {15, 15, 16, 15});      // stab
-    // REST: 4 silent phrases. an EMPTY song cell lasts only ONE 16-step row,
-    // so silent tracks need this to stay on the same song row as everyone else.
+    // Explicit rest chain: useful arrangement data and editable in the tracker.
     set_chain(15, {17, 17, 17, 17});
 
     // ======================= SONG =======================

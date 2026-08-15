@@ -1,5 +1,5 @@
-// host-side render test: run the REAL engine (Player+Mixer) over the moonlight
-// project for N seconds and analyze the output for clicks/farts.
+// host-side render test: run the REAL engine (Player+Mixer) over a generated
+// project for N seconds and analyze the output for clicks/clipping.
 // build: g++ -std=c++17 -I. -O2 tools/host_render.cpp \
 //          core/audio/mixer.cpp core/audio/fixed.cpp core/sequencer/player.cpp \
 //          core/sequencer/project.cpp core/synth/fm.cpp core/synth/dsn_synth.cpp \
@@ -18,7 +18,11 @@
 using namespace trackr;
 
 int main(int argc, char** argv) {
-    const char* path = argc > 1 ? argv[1] : "/tmp/moonlight.tr3d";
+    if (argc < 2) {
+        std::fprintf(stderr, "usage: %s <project.tr3d> [seconds] [norev|solo0..solo7]\n", argv[0]);
+        return 2;
+    }
+    const char* path = argv[1];
     int seconds = argc > 2 ? atoi(argv[2]) : 40;
     // argv[3]: optional bisect switch: "norev" | "solo0".."solo7"
     const char* mode = argc > 3 ? argv[3] : "";

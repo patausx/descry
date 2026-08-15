@@ -12,7 +12,11 @@
 using namespace trackr;
 
 int main(int argc, char** argv) {
-    const char* path = argc > 1 ? argv[1] : "/tmp/moonlight.tr3d";
+    if (argc < 2) {
+        std::fprintf(stderr, "usage: %s <project.tr3d> [from_seconds] [to_seconds]\n", argv[0]);
+        return 2;
+    }
+    const char* path = argv[1];
     double t_from = argc > 3 ? atof(argv[2]) : 20.0;
     double t_to   = argc > 3 ? atof(argv[3]) : 23.0;
 

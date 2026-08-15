@@ -164,6 +164,7 @@ DEMO_CORE := core/sequencer/project.cpp core/sequencer/serialize.cpp \
 
 demo:
 	@mkdir -p $(DEMO_OUT) build
+	@rm -f $(DEMO_OUT)/project_*.tr3d $(DEMO_OUT)/sample_*.s16 $(DEMO_OUT)/sample_*.name
 	@$(HOST_CXX) -std=c++17 -O2 -I. -o build/gen_jungle tools/gen_jungle.cpp $(DEMO_CORE)
 	@./build/gen_jungle $(DEMO_OUT)
 	@echo "demo content in $(DEMO_OUT)/"
