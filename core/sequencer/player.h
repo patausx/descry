@@ -68,13 +68,18 @@ public:
     // the offline renderer uses this as its end-of-song marker: `playing()` is
     // useless there because song playback loops forever by design.
     bool song_wrapped() const { return song_wrapped_; }
+    // Offline export uses this to stop exactly at the shared wrap boundary,
+    // before row 0 can trigger again. Live playback leaves it false and loops.
+    void set_stop_at_song_wrap(bool stop) { stop_at_song_wrap_ = stop; }
 
 private:
     void trigger_step(int track);
     void fire_note(int track, int note, uint8_t inst, uint8_t vel);  // create+start a voice (shared by trigger/retrig/delay/arp)
     void next_chain_row(int track);
-    void next_song_row(int track);
+    void advance_song_row();             // move every song-mode track at one shared boundary
     int  song_content_rows() const;      // last row with any chain +1 (song loop point)
+    int  song_row_steps(uint16_t row) const; // longest chain duration in this row (min one phrase)
+    void load_song_cell(int track, uint16_t row);
     void apply_track_fx(int track, uint8_t cmd, uint8_t val);   // V/F/B/T — immediate to mixer
     void apply_table_tick(int track);                            // call on every tick
     void reset_track_fx(int track);      // clean per-track mixer DSP (shared by play_*/launch)
@@ -99,8 +104,14 @@ private:
     int32_t  cur_tps_ = TICKS_PER_STEP;
     int      groove_tps_next();          // pull ticks-per-step for the step being started
 
-    // set by next_song_row when a song-mode track loops back to row 0
+    // Song rows are a GLOBAL timeline. Short cells loop inside the row; EMPTY
+    // cells wait silently. Neither can enter another row independently.
+    uint16_t song_row_ = 0;
+    uint16_t song_row_step_ = 0;
+    uint16_t song_row_duration_ = PHRASE_STEPS;
+    // set only when the shared song row wraps back to zero
     bool     song_wrapped_ = false;
+    bool     stop_at_song_wrap_ = false;
 
     // === live mode queue state ===
     uint8_t  queued_chain_[NUM_TRACKS] = {EMPTY, EMPTY, EMPTY, EMPTY,

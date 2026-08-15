@@ -58,6 +58,17 @@ void Player::apply_song_mixer(const Project& p, audio::Mixer& m) {
 void Player::play_song(uint16_t from_row) {
     audio::Mixer::LockGuard _g(mixer_);
     song_wrapped_ = false;
+    int len = song_content_rows();
+    if (len == 0) {
+        for (auto& ts : tracks_) ts.playing = false;
+        any_playing_ = false;
+        return;
+    }
+    if (from_row >= (uint16_t)len) from_row = 0;
+    song_row_ = from_row;
+    song_row_step_ = 0;
+    song_row_duration_ = (uint16_t)song_row_steps(song_row_);
+
     // reset FX state of all tracks to defaults (so the start is clean).
     // mutes come from the project, not from a blanket unmute: pressing PLAY used
     // to silently un-mute every track the user had muted in the mixer.
@@ -68,20 +79,12 @@ void Player::play_song(uint16_t from_row) {
     for (int t = 0; t < NUM_TRACKS; ++t) {
         auto& ts = tracks_[t];
         ts.playing    = true;
-        ts.song_mode_ = true;       // song drives by rows
-        ts.song_row   = from_row;
-        ts.chain_id   = project_.song.rows[from_row].chain[t];
-        ts.chain_row  = 0;
-        ts.phrase_id  = (ts.chain_id != EMPTY)
-                      ? project_.chains[ts.chain_id].rows[0].phrase
-                      : EMPTY;
-        ts.transpose  = (ts.chain_id != EMPTY)
-                      ? project_.chains[ts.chain_id].rows[0].transpose
-                      : 0;
-        ts.step = 0;
+        ts.song_mode_ = true;       // song rows advance on one shared global clock
         ts.phrase_pass = 0;
+        load_song_cell(t, song_row_);
     }
     any_playing_ = true;
+    global_step_ = 0;
     frames_to_next_tick_ = 0;
     tick_counter_ = 0;
     tick_in_step_ = 0;
@@ -560,27 +563,22 @@ void Player::next_chain_row(int track) {
     // counts every phrase restart (wrap or row advance), wraps naturally at 256.
     ++ts.phrase_pass;
     if (ts.chain_id == EMPTY) {
-        // song mode: an empty cell = one silent 16-step row - keep following the
-        // song grid so the track can (re)join when a later row has a chain.
-        if (ts.song_mode_) { next_song_row(track); return; }
-        // direct play_phrase without a chain - loop the phrase (preview) until the user presses STOP
+        // In song mode this track waits silently for the SHARED row boundary.
+        // Standalone play_phrase keeps looping as before.
         ts.step = 0;
         return;
     }
     ++ts.chain_row;
     if (ts.chain_row >= CHAIN_ROWS ||
         project_.chains[ts.chain_id].rows[ts.chain_row].phrase == EMPTY) {
-        // chain ended - in song mode go to the next row,
-        // in chain-only mode loop from the start
-        if (ts.song_mode_) {
-            next_song_row(track);
-        } else {
-            // chain loop - return to row 0
-            ts.chain_row = 0;
-            ts.phrase_id = project_.chains[ts.chain_id].rows[0].phrase;
-            ts.transpose = project_.chains[ts.chain_id].rows[0].transpose;
-            ts.step = 0;
-        }
+        // A standalone chain and a short Song cell both loop from row 0. Song
+        // mode still changes rows only at the shared boundary, so a one-phrase
+        // drum pattern repeats across a four-phrase bass chain instead of going
+        // silent after its first pass.
+        ts.chain_row = 0;
+        ts.phrase_id = project_.chains[ts.chain_id].rows[0].phrase;
+        ts.transpose = project_.chains[ts.chain_id].rows[0].transpose;
+        ts.step = 0;
         return;
     }
     ts.phrase_id = project_.chains[ts.chain_id].rows[ts.chain_row].phrase;
@@ -597,26 +595,64 @@ int Player::song_content_rows() const {
     return 0;
 }
 
-void Player::next_song_row(int track) {
-    auto& ts = tracks_[track];
-    ++ts.song_row;
-    int len = song_content_rows();
-    if (len == 0) { ts.playing = false; return; }   // empty song - nothing to follow
-    if (ts.song_row >= len) {
-        ts.song_row = 0;                            // loop at the end of content
-        song_wrapped_ = true;                       // one full pass done (render stop marker)
+int Player::song_row_steps(uint16_t row) const {
+    int longest = PHRASE_STEPS;  // an all-EMPTY row is one silent phrase minimum
+    if (row >= SONG_ROWS) return longest;
+    for (int t = 0; t < NUM_TRACKS; ++t) {
+        uint8_t chain_id = project_.song.rows[row].chain[t];
+        if (chain_id == EMPTY) continue;
+        int steps = 0;
+        for (int cr = 0; cr < CHAIN_ROWS; ++cr) {
+            uint8_t phrase_id = project_.chains[chain_id].rows[cr].phrase;
+            if (phrase_id == EMPTY) break;
+            steps += phrase_len(project_.phrases[phrase_id]);
+        }
+        if (steps > longest) longest = steps;
     }
-    ts.chain_id = project_.song.rows[ts.song_row].chain[track];
+    return longest;
+}
+
+void Player::load_song_cell(int track, uint16_t row) {
+    auto& ts = tracks_[track];
+    ts.song_row = row;
+    ts.chain_id = project_.song.rows[row].chain[track];
     ts.chain_row = 0;
     ts.step = 0;
-    if (ts.chain_id == EMPTY) {
-        // silent row: stay playing, keep the grid - rejoin when a chain appears
+    ts.hop_target = -1;
+    if (ts.chain_id == EMPTY || project_.chains[ts.chain_id].rows[0].phrase == EMPTY) {
+        ts.chain_id = EMPTY;
         ts.phrase_id = EMPTY;
         ts.transpose = 0;
         return;
     }
     ts.phrase_id = project_.chains[ts.chain_id].rows[0].phrase;
     ts.transpose = project_.chains[ts.chain_id].rows[0].transpose;
+}
+
+void Player::advance_song_row() {
+    int len = song_content_rows();
+    if (len == 0) return;
+    ++song_row_;
+    if (song_row_ >= (uint16_t)len) {
+        song_row_ = 0;
+        song_wrapped_ = true;
+        if (stop_at_song_wrap_) {
+            for (int t = 0; t < NUM_TRACKS; ++t) {
+                auto& ts = tracks_[t];
+                if (!ts.song_mode_) continue;
+                ts.playing = false;
+                ts.table_active = false;
+                mixer_.note_off_all(t);
+            }
+            return;
+        }
+    }
+    song_row_step_ = 0;
+    song_row_duration_ = (uint16_t)song_row_steps(song_row_);
+    for (int t = 0; t < NUM_TRACKS; ++t) {
+        auto& ts = tracks_[t];
+        if (ts.playing && ts.song_mode_) load_song_cell(t, song_row_);
+    }
 }
 
 // pull the ticks-per-step for the step that is starting now.
@@ -704,6 +740,18 @@ void Player::on_tick() {
     // so a launched chain plays its step 0 on this very tick)
     if (step_now) launch_queued();
 
+    // Song mode has ONE row clock. Change rows BEFORE triggering the next step,
+    // so TrackPlayState::song_row always describes what is actually sounding.
+    bool song_active = false;
+    if (step_now) {
+        for (const auto& ts : tracks_)
+            if (ts.playing && ts.song_mode_) { song_active = true; break; }
+        if (song_active && song_row_step_ >= song_row_duration_) {
+            advance_song_row();
+            if (stop_at_song_wrap_ && song_wrapped_) song_active = false;
+        }
+    }
+
     bool still_playing = false;
     for (int t = 0; t < NUM_TRACKS; ++t) {
         auto& ts = tracks_[t];
@@ -783,6 +831,8 @@ void Player::on_tick() {
 
         if (ts.playing) still_playing = true;
     }
+
+    if (step_now && song_active) ++song_row_step_;
     any_playing_ = still_playing;
 
     // advance the step-tick counter. the current step lasts cur_tps_ ticks;

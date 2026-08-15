@@ -219,6 +219,35 @@ int main() {
         delete p;
     }
 
+    // === 7. offline stop-at-wrap must not trigger the next loop ===
+    // Live mode loops normally; export mode stops song tracks at the shared
+    // boundary so row 0 cannot leak into the delay/reverb tail.
+    {
+        auto* p = new seq::Project();
+        build_project(*p, 0, 1);
+        auto* mix = new audio::Mixer();
+        seq::Player player(*p, *mix);
+        player.set_stop_at_song_wrap(true);
+        player.play_song(0);
+        constexpr long CHUNK = 32;
+        std::vector<fx::q15> buf(CHUNK * 2);
+        long frames = 0;
+        while (!player.song_wrapped() && frames < SR * 4L) {
+            player.advance(CHUNK, SR);
+            mix->render(buf.data(), CHUNK);
+            frames += CHUNK;
+        }
+        CHECK(player.song_wrapped(), "single-row song never wrapped");
+        CHECK(player.track_state(0).song_row == 0, "wrapped song must report row 0");
+        CHECK(!player.track_state(0).playing,
+              "offline stop-at-wrap left song track playing into the next loop");
+        CHECK(player.track_state(0).play_step == 15,
+              "offline wrap should preserve last sounding step 15, got %d",
+              player.track_state(0).play_step);
+        delete mix;
+        delete p;
+    }
+
     if (failures) { std::printf("test_render_mix: %d FAILURE(S)\n", failures); return 1; }
     std::printf("test_render_mix: all checks passed\n");
     return 0;

@@ -176,6 +176,7 @@ static bool render_song_to_wav(char* rel_out, std::size_t rel_n) {
     auto* xplayer = new seq::Player(g_project, *xmix);
     // what you hear IS what you get: same song->mixer mapping as playback
     seq::Player::apply_song_mixer(g_project, *xmix);
+    xplayer->set_stop_at_song_wrap(true);
     xplayer->play_song(0);
 
     constexpr int SR = 32000;
@@ -196,7 +197,9 @@ static bool render_song_to_wav(char* rel_out, std::size_t rel_n) {
     bool io_ok = true;
 
     while (total_frames < SR * MAX_SECONDS) {
-        xplayer->advance(CHUNK, SR);
+        // Once the shared Song boundary wraps, stop sequencing fresh loop notes.
+        // Existing voices enter release and Mixer keeps rendering their tails.
+        if (!wrapped) xplayer->advance(CHUNK, SR);
         xmix->render((fx::q15*)buf, CHUNK);
         if (std::fwrite(buf, sizeof(int16_t), CHUNK * 2, f) != CHUNK * 2) {
             io_ok = false;   // SD full / yanked - stop, don't pretend it worked
@@ -211,14 +214,15 @@ static bool render_song_to_wav(char* rel_out, std::size_t rel_n) {
             if (!any_sound && total_frames >= DEAD_START_FRAMES) break;
         }
 
-        // one full pass through the song's content rows -> render the FX tail
+        // one full pass through the song's content rows -> Player has already
+        // released song voices at the exact shared boundary; now render tails.
         if (!wrapped && xplayer->song_wrapped()) wrapped = true;
         if (wrapped) {
             tail_frames += CHUNK;
             if (tail_frames >= TAIL_FRAMES) break;
         }
-        // a track-driven stop (play_phrase-style end, empty song) also ends it
-        if (!xplayer->playing()) break;
+        // a track-driven stop (play_phrase-style end) also ends it before wrap
+        if (!wrapped && !xplayer->playing()) break;
     }
 
     for (int t = 0; t < seq::NUM_TRACKS; ++t) {
