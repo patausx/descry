@@ -14,6 +14,11 @@ with binaries, checksums and the long-form notes.
 ## [1.0.6] — 2026-08-15
 
 ### added
+- **Phrase Tools and a permanent Phrase inspector** — rotate, reverse,
+  transpose/octave, velocity ramps and deterministic generators can target the
+  playable phrase or a selection. the inspector resolves the active instrument,
+  source, live envelope, ALWAYS defaults/mod table and all three decoded FX; use
+  SELECT on the instrument column to jump into its editor
 - **generative Phrase Tools** — Euclidean rhythms, density gating, humanize,
   ratchets, scale-aware mutation, random notes, trigger-chance spread and `EVN`
   cycle distribution, alongside the existing transforms. every generator takes
@@ -26,7 +31,8 @@ with binaries, checksums and the long-form notes.
   release bundle includes both the project and its required sample audio
 - **analog editing controls** — the circle pad accelerates movement through the
   Song view and scrubs/zooms the sampler window; the C-stick acts as a relative
-  fine/coarse value encoder
+  fine/coarse value encoder. this replaces the old stick-as-KAOSS and
+  right-stick sends/crush mappings; the KAOSS `STK` toggle is gone
 - **continuous integration** — every push and pull request runs the host test
   suite, builds the IRONLUNG bundle and performs a full devkitARM build; both the
   demo and `descry.3dsx` are uploaded as artifacts
@@ -60,6 +66,8 @@ with binaries, checksums and the long-form notes.
   FX list, Phrase Tools and the KAOSS assign menu closed on the same frame they
   were dismissed, letting that button also act on the screen underneath. they
   now animate out and stay input-opaque while they do
+- leaving KAOSS mode during a held gesture now performs the normal release ramp
+  instead of leaving performance parameters frozen
 - grid lines and inactive borders were drawn brighter than the dim text they
   frame in every theme, so the scaffolding read louder than the notes
 - touch keys, pads, filter tints and confirmation states no longer stay in the
@@ -73,8 +81,8 @@ with binaries, checksums and the long-form notes.
 ### changed
 - START in the Song view plays from the cursor row; hold L+START to play from
   the top
-- Song exports stream directly to the SD card with a ten-minute safety cap,
-  rather than buffering the entire WAV in RAM
+- Song exports stream transactionally to the SD card with a ten-minute safety
+  cap: a failed/full-card write cannot replace a good render with a torn WAV
 - `DTIM` is displayed in milliseconds instead of exposing raw 32-frame storage
   units
 - undo/redo can report every phrase step a grouped edit restored, so undoing a
