@@ -1,5 +1,5 @@
 // App: in-app HELP — paginated manual overlay on the bottom screen.
-// opened by tapping the hint strip (or the "?" badge). owns all touches
+// opened by tapping the small "?" badge. owns all touches
 // while open, closed with B / tapping the header / CLOSE button.
 //
 // content mirrors docs/GUIDE.md in compressed form: basics, keys, phrase
@@ -178,10 +178,9 @@ static const char* const pg_files[] = {
     "",
     "mic: REC panel in a sampler instrument -",
     "record straight into a sample slot.",
-    "WAVE: X or >WT turns the visible window",
-    "into a persistent USER wavetable + WAV inst.",
-    "WAVE tab: trim, normalize, fades, crop.",
-    "SLICE tab: TRNS=transient chop (LO/MID/HI),",
+    "WAVE: circle Y zoom viewport, X pans; touch",
+    "markers set precise crop range. X/>WT captures.",
+    "SLICE: circle Y zoom, X pan; TRNS/EQ cuts,",
     "EQ=equal 4/8/16/32, REV=reverse one slice,",
     "tap=select/play, DEL=remove selected boundary.",
     ">KIT >PHR SHUF=dice. drag marker=moves it.",
@@ -201,10 +200,12 @@ static const char* const pg_sd[] = {
     "  screens/     screenshots (R+SELECT)",
     "  renders/     song exports",
     "",
-    "EXPORT: SELECT in the PRJ view renders the",
-    "song to renders/<project name>.wav",
-    "(60s max, 32kHz stereo). the PRJ view shows",
-    "the exact target filename before you press.",
+    "EXPORT: SELECT in PRJ = full reference mix.",
+    "ZL+SELECT = synchronized dry DAW stem set:",
+    "NAME_mix.wav + used NAME_t1..t8.wav.",
+    "stems keep track FX/fader/pan/duck but omit",
+    "global delay, reverb and master processing.",
+    "exports are 32kHz stereo; no overwrite.",
     "",
     "rename the project first: hold R in the PRJ",
     "view, A/B cycle char, L/R move, X=clear.",

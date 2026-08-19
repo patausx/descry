@@ -70,7 +70,13 @@ public:
     // flags for main to call save/load (gets and clears)
     bool consume_save_request() { bool v = save_request_; save_request_ = false; return v; }
     bool consume_load_request() { bool v = load_request_; load_request_ = false; return v; }
-    bool consume_render_request() { bool v = render_request_; render_request_ = false; return v; }
+    bool consume_render_request(bool& stems) {
+        if (!render_request_) return false;
+        render_request_ = false;
+        stems = render_stems_request_;
+        render_stems_request_ = false;
+        return true;
+    }
     bool consume_reset_request() { bool v = reset_request_; reset_request_ = false; return v; }
 
     // drop the undo/redo history. MUST be called by the platform layer whenever
@@ -446,6 +452,14 @@ private:
     int        smp_chop_sel_   = 0;        // selected chop 0..31 (SLICE panel)
     int        smp_auto_sens_  = 1;        // transient slice sensitivity idx 0=LO 1=MID 2=HI
     int        smp_eq_idx_     = 2;        // equal slice count idx into {4,8,16,32}
+    // SLICE viewport, normalized over the whole sample. Circle Pad X pans and Y
+    // zooms; unlike SamplerParams::start/length this is UI-only and never changes playback.
+    int        smp_slice_view_start_  = 0;
+    int        smp_slice_view_length_ = fx::Q15_ONE;
+    int        smp_slice_view_slot_   = -1;
+    int        smp_wave_view_start_   = 0;
+    int        smp_wave_view_length_  = fx::Q15_ONE;
+    int        smp_wave_view_slot_    = -1;
     // LOAD panel: X auditions the highlighted WAV into this transient sample;
     // A still imports into the selected bank slot. The preview sample never
     // touches persistence and its voice is cut before the buffer is replaced.
@@ -582,6 +596,7 @@ private:
     bool    save_request_ = false;
     bool    load_request_ = false;
     bool    render_request_ = false;
+    bool    render_stems_request_ = false;
     bool    reset_request_ = false;
     RecMode rec_mode_ = RecMode::Jam;  // JAM / WRITE / LIVE (touch REC btn cycles)
     bool    recording_now_ = false;  // audio capture live (mic/resample) - red tint

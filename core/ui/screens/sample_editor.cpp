@@ -40,6 +40,8 @@ void App::on_rec_done(int slot) {
         }
     }
     cur_sample_ = (uint8_t)slot;
+    smp_slice_view_slot_ = -1;  // new recording: reopen the whole waveform
+    smp_wave_view_slot_ = -1;
     mark_project_dirty();
 }
 

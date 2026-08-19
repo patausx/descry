@@ -121,24 +121,121 @@ extern "C" {
     u32 __stacksize__ = 512 * 1024;  // 512 KB
 }
 
-// === render filename (issue #6: "change title before rendering") ===
-// the export used to be a single hardcoded render.wav, so rendering a second
-// project silently destroyed the first one. now the file is named after the
-// PROJECT NAME (editable in the project view: hold R, A/B cycle chars) and a
-// numeric suffix is added instead of overwriting an existing take.
-// the name sanitizer lives in core (seq::sanitize_basename) so the UI can
-// display the exact target filename before the render starts.
+// === render output naming ===
+// A mix render remains NAME[_NN].wav. A stem render reserves one coherent base
+// and creates NAME[_NN]_mix.wav + NAME[_NN]_t1.wav ... _t8.wav. No member of a
+// set may collide with an existing file or temp file.
+static bool path_exists(const char* path) {
+    struct stat st;
+    return stat(path, &st) == 0;
+}
 
-// full path for the next render. `rel` gets the short "NAME.wav" form
-// for the status line (slot_status is only 64 bytes).
-static void render_output_path(char* path, std::size_t np, char* rel, std::size_t nr) {
+static bool render_output_path(char* path, std::size_t np, char* rel, std::size_t nr) {
     char base[32];
     seq::sanitize_basename(g_project.name, base, sizeof(base));
     seq::next_free_filename(RENDERS_DIR, base, ".wav", rel, nr);
     std::snprintf(path, np, "%s/%s", RENDERS_DIR, rel);
+    return true;
 }
 
-// === render to wav (render the whole song) ===
+static bool reserve_stem_base(char* out, std::size_t n) {
+    char project_base[32];
+    seq::sanitize_basename(g_project.name, project_base, sizeof(project_base));
+    for (int take = 0; take <= 99; ++take) {
+        char base[40];
+        if (take == 0) std::snprintf(base, sizeof(base), "%s", project_base);
+        else std::snprintf(base, sizeof(base), "%s_%02d", project_base, take);
+        bool collision = false;
+        for (int member = -1; member < seq::NUM_TRACKS; ++member) {
+            char path[160];
+            if (member < 0) std::snprintf(path, sizeof(path), "%s/%s_mix.wav", RENDERS_DIR, base);
+            else std::snprintf(path, sizeof(path), "%s/%s_t%d.wav", RENDERS_DIR, base, member + 1);
+            if (path_exists(path)) { collision = true; break; }
+            std::size_t len = std::strlen(path);
+            if (len + 4 < sizeof(path)) {
+                std::memcpy(path + len, ".tmp", 5);
+                if (path_exists(path)) { collision = true; break; }
+            }
+        }
+        if (!collision) { std::snprintf(out, n, "%s", base); return true; }
+    }
+    return false;
+}
+
+static bool song_track_has_notes(const seq::Project& p, int track) {
+    if (track < 0 || track >= seq::NUM_TRACKS) return false;
+    for (int sr = 0; sr < seq::SONG_ROWS; ++sr) {
+        uint8_t chain_id = p.song.rows[sr].chain[track];
+        if (chain_id == seq::EMPTY) continue;
+        const auto& chain = p.chains[chain_id];
+        for (int cr = 0; cr < seq::CHAIN_ROWS; ++cr) {
+            uint8_t phrase_id = chain.rows[cr].phrase;
+            if (phrase_id == seq::EMPTY) continue;
+            const auto& phrase = p.phrases[phrase_id];
+            for (int step = 0; step < seq::phrase_len(phrase); ++step) {
+                const auto& s = phrase.steps[step];
+                if (s.note != seq::EMPTY && s.instrument != seq::EMPTY &&
+                    s.instrument < seq::MAX_INSTRUMENTS) return true;
+            }
+        }
+    }
+    return false;
+}
+
+struct RenderFile {
+    FILE* file = nullptr;
+    char final_path[160] = {0};
+    char temp_path[164] = {0};
+    WavHeader header{};
+    bool active = false;
+};
+
+static void discard_render_files(RenderFile* files, int count) {
+    for (int i = 0; i < count; ++i) {
+        if (files[i].file) std::fclose(files[i].file);
+        files[i].file = nullptr;
+        if (files[i].temp_path[0]) std::remove(files[i].temp_path);
+    }
+}
+
+static bool open_render_file(RenderFile& rf, const char* path) {
+    std::snprintf(rf.final_path, sizeof(rf.final_path), "%s", path);
+    std::snprintf(rf.temp_path, sizeof(rf.temp_path), "%s.tmp", path);
+    rf.file = std::fopen(rf.temp_path, "wb");
+    if (!rf.file) return false;
+    fill_wav_header(rf.header, 0, 32000);
+    if (std::fwrite(&rf.header, sizeof(rf.header), 1, rf.file) != 1) {
+        std::fclose(rf.file); rf.file = nullptr; std::remove(rf.temp_path); return false;
+    }
+    rf.active = true;
+    return true;
+}
+
+static bool finish_render_files(RenderFile* files, int count, std::size_t total_frames) {
+    bool ok = true;
+    for (int i = 0; i < count; ++i) {
+        if (!files[i].active) continue;
+        fill_wav_header(files[i].header, total_frames, 32000);
+        bool file_ok = std::fseek(files[i].file, 0, SEEK_SET) == 0
+                    && std::fwrite(&files[i].header, sizeof(files[i].header), 1, files[i].file) == 1;
+        file_ok = (std::fclose(files[i].file) == 0) && file_ok;
+        files[i].file = nullptr;
+        if (!file_ok) { std::remove(files[i].temp_path); ok = false; }
+    }
+    if (!ok) { discard_render_files(files, count); return false; }
+    for (int i = 0; i < count; ++i) {
+        if (!files[i].active) continue;
+        if (std::rename(files[i].temp_path, files[i].final_path) != 0) {
+            // Roll back any finals already published: a partial stem set is poison.
+            for (int j = 0; j < i; ++j) if (files[j].active) std::remove(files[j].final_path);
+            for (int j = i; j < count; ++j) if (files[j].active) std::remove(files[j].temp_path);
+            return false;
+        }
+    }
+    return true;
+}
+
+// === render to wav (whole song, optional dry one-pass stems) ===
 // writes to renders/<project name>[_NN].wav; `rel_out` receives that short name.
 //
 // three bugs lived here before:
@@ -151,101 +248,127 @@ static void render_output_path(char* path, std::size_t np, char* rel, std::size_
 //  3. song playback loops forever, so the only stop condition was a hard 60s cap:
 //     longer songs were silently cropped. now Player::song_wrapped() marks one
 //     full pass and we keep rendering a tail so delay/reverb ring out.
-static bool render_song_to_wav(char* rel_out, std::size_t rel_n) {
+static bool render_song_to_wav(bool stems, char* rel_out, std::size_t rel_n) {
     mkdir("sdmc:/3ds", 0777);
     mkdir(SAMPLE_DIR, 0777);
     mkdir(RENDERS_DIR, 0777);
-    char path[128], rel[40], tmp_path[136];
-    render_output_path(path, sizeof(path), rel, sizeof(rel));
-    std::snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 
-    // stream straight to SD: a 10-minute song is ~77MB of PCM, which is far more
-    // than the 3DS has to spare - the old code accumulated the WHOLE render in a
-    // std::vector first. header is written with a placeholder length and patched
-    // at the end, and the file only gets its real name once it is complete.
-    FILE* f = std::fopen(tmp_path, "wb");
-    if (!f) return false;
-    WavHeader hdr{};
-    fill_wav_header(hdr, 0, 32000);
-    if (std::fwrite(&hdr, sizeof(hdr), 1, f) != 1) {
-        std::fclose(f); std::remove(tmp_path); return false;
+    // Snapshot the project: TMP can mutate tempo during playback, while the live
+    // UI/audio threads must remain free to keep using g_project.
+    auto* render_project = new (std::nothrow) seq::Project(g_project);
+    if (!render_project) return false;
+
+    bool active_tracks[seq::NUM_TRACKS] = {false};
+    int active_count = 0;
+    for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+        active_tracks[t] = song_track_has_notes(*render_project, t);
+        if (active_tracks[t]) ++active_count;
+    }
+    if (active_count == 0) { delete render_project; return false; }
+
+    RenderFile files[1 + seq::NUM_TRACKS];
+    char rel[48] = {0};
+    int file_count = 1 + (stems ? seq::NUM_TRACKS : 0);
+    if (stems) {
+        char base[40];
+        if (!reserve_stem_base(base, sizeof(base))) { delete render_project; return false; }
+        std::snprintf(rel, sizeof(rel), "%s_STEMS", base);
+        char path[160];
+        std::snprintf(path, sizeof(path), "%s/%s_mix.wav", RENDERS_DIR, base);
+        if (!open_render_file(files[0], path)) { delete render_project; return false; }
+        for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+            if (!active_tracks[t]) continue;
+            std::snprintf(path, sizeof(path), "%s/%s_t%d.wav", RENDERS_DIR, base, t + 1);
+            if (!open_render_file(files[t + 1], path)) {
+                discard_render_files(files, file_count); delete render_project; return false;
+            }
+        }
+    } else {
+        char path[128];
+        render_output_path(path, sizeof(path), rel, sizeof(rel));
+        if (!open_render_file(files[0], path)) { delete render_project; return false; }
     }
 
-    // Mixer + Player on the heap (~80kb total, dangerous on the stack)
-    auto* xmix = new audio::Mixer();
-    auto* xplayer = new seq::Player(g_project, *xmix);
-    // what you hear IS what you get: same song->mixer mapping as playback
-    seq::Player::apply_song_mixer(g_project, *xmix);
+    auto* xmix = new (std::nothrow) audio::Mixer();
+    auto* xplayer = xmix ? new (std::nothrow) seq::Player(*render_project, *xmix) : nullptr;
+    if (!xmix || !xplayer) {
+        delete xplayer; delete xmix; delete render_project;
+        discard_render_files(files, file_count); return false;
+    }
+    seq::Player::apply_song_mixer(*render_project, *xmix);
+    // Reference mix honors persisted mutes. Stems export arranged tracks even if
+    // muted: the mute is a mix decision, and the DAW stem must remain recoverable.
     xplayer->set_stop_at_song_wrap(true);
     xplayer->play_song(0);
 
     constexpr int SR = 32000;
-    constexpr std::size_t MAX_SECONDS = 600;      // hard safety cap (10 min)
+    constexpr std::size_t MAX_SECONDS = 600;
     constexpr std::size_t CHUNK = 1024;
-    // tail rendered after the song wraps, so delay/reverb decay into the file
-    // instead of being chopped off mid-repeat.
     constexpr std::size_t TAIL_FRAMES = SR * 3;
-    // silence bail-out only applies to a song that never produced sound at all
-    // (all-empty / all-muted project) - not to musical rests.
-    constexpr std::size_t DEAD_START_FRAMES = SR * 4;
 
-    int16_t buf[CHUNK * 2];
+    int16_t mix_buf[CHUNK * 2];
+    int16_t stem_buf[seq::NUM_TRACKS][CHUNK * 2];
+    fx::q15* taps[seq::NUM_TRACKS] = {nullptr};
+    if (stems) {
+        for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+            if (!active_tracks[t]) continue;
+            taps[t] = (fx::q15*)stem_buf[t];
+        }
+        xmix->set_stem_taps(taps);
+    }
+
     std::size_t total_frames = 0;
     std::size_t tail_frames = 0;
-    bool any_sound = false;
     bool wrapped = false;
     bool io_ok = true;
 
     while (total_frames < SR * MAX_SECONDS) {
-        // Once the shared Song boundary wraps, stop sequencing fresh loop notes.
-        // Existing voices enter release and Mixer keeps rendering their tails.
-        if (!wrapped) xplayer->advance(CHUNK, SR);
-        xmix->render((fx::q15*)buf, CHUNK);
-        if (std::fwrite(buf, sizeof(int16_t), CHUNK * 2, f) != CHUNK * 2) {
-            io_ok = false;   // SD full / yanked - stop, don't pretend it worked
-            break;
+        std::size_t chunk_done = 0;
+        while (chunk_done < CHUNK) {
+            int32_t n = wrapped ? (int32_t)(CHUNK - chunk_done)
+                                : xplayer->advance_upto((int32_t)(CHUNK - chunk_done), SR);
+            if (n <= 0) { io_ok = false; break; }
+            if (stems) {
+                for (int t = 0; t < seq::NUM_TRACKS; ++t)
+                    taps[t] = active_tracks[t] ? (fx::q15*)stem_buf[t] + chunk_done * 2 : nullptr;
+                xmix->set_stem_taps(taps);
+            }
+            xmix->render((fx::q15*)mix_buf + chunk_done * 2, (std::size_t)n);
+            chunk_done += (std::size_t)n;
+            if (!wrapped && xplayer->song_wrapped()) wrapped = true;
+        }
+        if (!io_ok) break;
+        if (std::fwrite(mix_buf, sizeof(int16_t), CHUNK * 2, files[0].file) != CHUNK * 2) {
+            io_ok = false; break;
+        }
+        if (stems) {
+            for (int t = 0; t < seq::NUM_TRACKS; ++t) {
+                if (!active_tracks[t]) continue;
+                if (std::fwrite(stem_buf[t], sizeof(int16_t), CHUNK * 2, files[t + 1].file) != CHUNK * 2) {
+                    io_ok = false; break;
+                }
+            }
+            if (!io_ok) break;
         }
         total_frames += CHUNK;
-
-        if (!any_sound) {
-            for (std::size_t i = 0; i < CHUNK * 2; ++i)
-                if (buf[i] != 0) { any_sound = true; break; }
-            // nothing at all in the first seconds = empty/muted song, give up
-            if (!any_sound && total_frames >= DEAD_START_FRAMES) break;
-        }
-
-        // one full pass through the song's content rows -> Player has already
-        // released song voices at the exact shared boundary; now render tails.
-        if (!wrapped && xplayer->song_wrapped()) wrapped = true;
         if (wrapped) {
             tail_frames += CHUNK;
             if (tail_frames >= TAIL_FRAMES) break;
         }
-        // a track-driven stop (play_phrase-style end) also ends it before wrap
         if (!wrapped && !xplayer->playing()) break;
     }
 
-    for (int t = 0; t < seq::NUM_TRACKS; ++t) {
-        xmix->clear_voices(t);
-    }
+    xmix->clear_stem_taps();
+    for (int t = 0; t < seq::NUM_TRACKS; ++t) xmix->clear_voices(t);
     delete xplayer;
     delete xmix;
+    delete render_project;
 
-    if (!io_ok || !any_sound || total_frames == 0) {
-        std::fclose(f);
-        std::remove(tmp_path);
+    if (!io_ok || !wrapped || total_frames == 0 || total_frames >= SR * MAX_SECONDS) {
+        discard_render_files(files, file_count);
         return false;
     }
-
-    // patch the header now that the real length is known
-    fill_wav_header(hdr, total_frames, SR);
-    bool ok = std::fseek(f, 0, SEEK_SET) == 0
-           && std::fwrite(&hdr, sizeof(hdr), 1, f) == 1;
-    ok = (std::fclose(f) == 0) && ok;
-    if (!ok) { std::remove(tmp_path); return false; }
-
-    std::remove(path);
-    if (std::rename(tmp_path, path) != 0) { std::remove(tmp_path); return false; }
+    if (!finish_render_files(files, file_count, total_frames)) return false;
     if (rel_out) std::snprintf(rel_out, rel_n, "%s", rel);
     return true;
 }
@@ -1207,17 +1330,17 @@ int main() {
                 std::snprintf(app.slot_status, sizeof(app.slot_status), "NEW FAILED - OUT OF MEMORY");
             }
         }
-        if (app.consume_render_request()) {
-            // pause realtime audio briefly, render, resume
-            // (realtime audio uses g_mixer and the live player, render has its own xmix/xplayer - no conflict)
-            char rel[40] = {0};
-            bool ok = render_song_to_wav(rel, sizeof(rel));
+        bool stems = false;
+        if (app.consume_render_request(stems)) {
+            // Private snapshot/Mixer/Player: live playback keeps its own state.
+            char rel[48] = {0};
+            bool ok = render_song_to_wav(stems, rel, sizeof(rel));
             if (ok) {
                 std::snprintf(app.slot_status, sizeof(app.slot_status),
                               "rendered -> renders/%s", rel);
                 app.notify_project_motion(-1, 6);
             } else    std::snprintf(app.slot_status, sizeof(app.slot_status),
-                                  "RENDER FAILED (empty song?)");
+                                  stems ? "STEM RENDER FAILED" : "RENDER FAILED (empty song?)");
         }
 
         // === project menu actions ===

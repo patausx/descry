@@ -248,6 +248,55 @@ int main() {
         delete p;
     }
 
+    // === 8. dry stem taps: isolated, post-pan/fader, pre global sends/master ===
+    {
+        auto* p = new seq::Project();
+        build_project(*p, 0, 1);
+        // Duplicate the arranged chain onto track 1 so both channels sound.
+        p->song.rows[0].chain[1] = 0;
+        p->song.dly_wet = 255;
+        p->song.rev_wet = 255;
+        p->song.master_vol = 8;       // stems must ignore global master volume
+        p->song.track_vol[0] = 128;
+        p->instruments[0].fx_pan = -128;
+        p->instruments[0].fx_send_del = 255;
+        p->instruments[0].fx_send_rev = 255;
+        auto* mix = new audio::Mixer();
+        seq::Player::apply_song_mixer(*p, *mix);
+        seq::Player player(*p, *mix);
+        player.play_song(0);
+
+        constexpr int N = 256;
+        fx::q15 master[N * 2], stem0[N * 2], stem1[N * 2];
+        fx::q15* taps[seq::NUM_TRACKS] = {stem0, stem1, nullptr, nullptr,
+                                          nullptr, nullptr, nullptr, nullptr};
+        mix->set_stem_taps(taps);
+        player.advance_upto(N, SR);
+        mix->render(master, N);
+        int p0l = 0, p0r = 0, p1 = 0;
+        for (int i = 0; i < N; ++i) {
+            p0l = std::max(p0l, std::abs((int)stem0[i*2]));
+            p0r = std::max(p0r, std::abs((int)stem0[i*2 + 1]));
+            p1 = std::max(p1, std::max(std::abs((int)stem1[i*2]), std::abs((int)stem1[i*2 + 1])));
+        }
+        CHECK(p0l > 100, "track 0 dry tap is silent");
+        CHECK(p0r < p0l / 20 + 2, "track 0 pan missing from stem: L=%d R=%d", p0l, p0r);
+        CHECK(p1 > 100, "track 1 dry tap is silent");
+
+        // Persisted mute suppresses reference mix contribution but not recovery
+        // of the arranged track stem.
+        mix->track(0).muted = true;
+        player.advance_upto(N, SR);
+        mix->render(master, N);
+        int muted_stem_peak = 0;
+        for (int i = 0; i < N * 2; ++i)
+            muted_stem_peak = std::max(muted_stem_peak, std::abs((int)stem0[i]));
+        CHECK(muted_stem_peak > 0, "muted arranged track disappeared from stem tap");
+        mix->clear_stem_taps();
+        delete mix;
+        delete p;
+    }
+
     if (failures) { std::printf("test_render_mix: %d FAILURE(S)\n", failures); return 1; }
     std::printf("test_render_mix: all checks passed\n");
     return 0;

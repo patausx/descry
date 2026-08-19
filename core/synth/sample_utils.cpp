@@ -17,14 +17,23 @@ static inline int16_t left_at(const Sample& s, uint32_t frame) {
 // instrument editor's WAVE panel shares one implementation) ===
 
 void sample_trim_norm(Sample& s, fx::q15 start_norm, fx::q15 length_norm) {
-    if (s.data.empty()) return;
-    uint32_t total = (uint32_t)s.data.size();
-    uint32_t a = ((uint32_t)start_norm * total) >> 15;
-    uint32_t len = ((uint32_t)length_norm * total) >> 15;
-    if (a >= total) return;
-    if (a + len > total) len = total - a;
-    if (len == 0) return;
-    std::vector<fx::q15> trimmed(s.data.begin() + a, s.data.begin() + a + len);
+    const uint32_t total_frames = s.num_frames();
+    if (total_frames == 0) return;
+
+    // Normalized positions are frame coordinates, not raw interleaved sample
+    // indices. Keep the multiply in 64 bits: at 32 kHz the old uint32_t math
+    // overflowed after only a few seconds and CROP returned a random short hit.
+    const uint32_t start_q15 = start_norm < 0 ? 0u : (uint32_t)start_norm;
+    const uint32_t length_q15 = length_norm < 0 ? 0u : (uint32_t)length_norm;
+    uint32_t first_frame = (uint32_t)(((uint64_t)start_q15 * total_frames) >> 15);
+    uint32_t frame_count = (uint32_t)(((uint64_t)length_q15 * total_frames) >> 15);
+    if (first_frame >= total_frames) return;
+    if (frame_count > total_frames - first_frame) frame_count = total_frames - first_frame;
+    if (frame_count == 0) return;
+
+    const std::size_t first = (std::size_t)first_frame * s.channels;
+    const std::size_t count = (std::size_t)frame_count * s.channels;
+    std::vector<fx::q15> trimmed(s.data.begin() + first, s.data.begin() + first + count);
     s.data = std::move(trimmed);
     // reset chops/loops - otherwise they'd point to the wrong place
     s.loop_start = 0;

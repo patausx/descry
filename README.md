@@ -60,13 +60,16 @@ old 3DS is not supported.
 - mixer view with touch faders, meters and peak hold
 - KAOSS-style XY pad: two assignable destinations, per-track or all tracks at
   once, parameters ramp back on release
-- circle pad provides accelerated Song movement and sampler waveform scrub/zoom;
+- circle pad provides accelerated Song movement and sampler waveform pan/zoom;
   C-stick is a velocity-sensitive value encoder with fine/coarse steps
 
 **sampling**
 - record from the built-in mic straight into a sample slot (hold ZR)
 - 12 procedural drum/tone generators — build a kit with no files at all
-- sample editor: trim, normalize, reverse, fades, chop, copy
+- sample editor: crop, normalize, reverse, fades and slice markers with a
+  Circle Pad viewport zoom up to 256×
+- one-pass dry stem export for DAW work: synchronized reference mix + arranged
+  tracks, keeping track DSP/pan/duck while leaving global delay/reverb unbaked
 
 **misc**
 - 6 color themes (tap the DESCRY logo to pick)
@@ -83,7 +86,7 @@ old 3DS is not supported.
 | L / R (tap) | previous / next view |
 | L + D-pad | BPM · R + ↑↓ groove · R + ←→ swing |
 | ZL + X / Y | copy / paste · ZL + B / A — undo / redo |
-| ZL + SELECT | clone (song/chain) · selection mode (phrase) |
+| ZL + SELECT | clone (song/chain) · selection mode (phrase) · dry stems (project) |
 | R + X | Phrase Tools (whole playable phrase or selected rows) |
 | SELECT | preview note · FX command list (on FX columns) |
 | L + SELECT | fullscreen oscilloscope |
@@ -97,16 +100,13 @@ old 3DS is not supported.
 
 grab the [latest release](https://github.com/patausx/descry/releases/latest):
 
-- **CIA** (recommended on CFW) — install `descry.cia` with FBI; the app gets its
-  own home menu icon + banner
+- **CIA** — install `descry.cia` from v1.0.6 with FBI if you want a Home Menu
+  install; v1.0.7 currently ships the updated 3DSX only
 - **3DSX** — copy `descry.3dsx` to `/3ds/descry/descry.3dsx` on the SD
   card and launch it from the Homebrew Launcher
-- `descry.3ds` — CCI for flashcarts
 
-the release also carries the **IRONLUNG** demo bundle: copy
-`project_00.tr3d`, `sample_63.s16` and `sample_63.name` together to
-`/3ds/descry/`. the project file does not embed sample audio, so all three files
-are required.
+v1.0.7 does not repeat the CCI or separate IRONLUNG bundle; those remain available
+on the older release pages.
 
 ## build
 

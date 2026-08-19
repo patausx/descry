@@ -169,8 +169,22 @@ void App::draw_mixer_faders(Draw& d) {
         // fill from the bottom
         int fill = (int)vol * (fh - 2) / 255;
         Color fc = master ? pal::HEADER : (muted ? pal::FG_DIM : pal::PLAY);
-        if (fill > 0) d.rect(x + 2, fy + fh - 1 - fill, w - 4, fill,
-                             lerp_color(pal::PANEL, fc, 180));
+        if (fill > 0) {
+            // Four cheap bands give the fader body some depth without turning
+            // the restrained tracker palette into glossy skeuomorphic sludge.
+            constexpr int BANDS = 4;
+            const int top = fy + fh - 1 - fill;
+            for (int b = 0; b < BANDS; ++b) {
+                int y0 = top + fill * b / BANDS;
+                int y1 = top + fill * (b + 1) / BANDS;
+                uint8_t shade = (uint8_t)(105 + b * 28); // darker top, richer bottom
+                if (y1 > y0)
+                    d.rect(x + 2, y0, w - 4, y1 - y0,
+                           lerp_color(pal::PANEL, fc, shade));
+            }
+            // one-pixel side sheen keeps the narrow strip legible at low values
+            d.rect(x + 2, top, 1, fill, with_alpha(pal::FG, muted ? 22 : 42));
+        }
         // cap line
         d.rect(x, fy + fh - 1 - fill, w, mixer_touch_active_ && sel ? 3 : 2, fc);
         // old cap ghosts out after a move, making the physical travel readable.
@@ -274,7 +288,19 @@ void App::draw_mixer(Draw& d) {
         int fx_ = x + 6;
         d.rect(fx_, FADER_Y, FW, FADER_H, pal::BG_HI);
         int fh = (int)vol * FADER_H / 255;
-        d.rect(fx_, FADER_Y + FADER_H - fh, FW, fh, sel ? pal::CURSOR : pal::HEADER);
+        if (fh > 0) {
+            Color fc = sel ? pal::CURSOR : pal::HEADER;
+            constexpr int BANDS = 5;
+            const int top = FADER_Y + FADER_H - fh;
+            for (int b = 0; b < BANDS; ++b) {
+                int y0 = top + fh * b / BANDS;
+                int y1 = top + fh * (b + 1) / BANDS;
+                uint8_t shade = (uint8_t)(100 + b * 27);
+                if (y1 > y0)
+                    d.rect(fx_, y0, FW, y1 - y0, lerp_color(pal::BG_HI, fc, shade));
+            }
+            d.rect(fx_, top, 1, fh, with_alpha(pal::FG, sel ? 70 : 36));
+        }
         // fader cap line
         d.rect(fx_ - 2, FADER_Y + FADER_H - fh - 1, FW + 4, 2, sel ? pal::FG : pal::FG_DIM);
 

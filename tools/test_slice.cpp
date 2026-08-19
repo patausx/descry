@@ -114,6 +114,39 @@ int main() {
         assert(highest > lowest && "sensitivity must change the chop count");
     }
 
-    std::puts("slice detector: ok");
+    // --- crop regression: normalized math must survive long mono/stereo files ---
+    // The old uint32_t multiply wrapped on an Amen-length sample and CROP kept
+    // one random hit instead of the selected final seconds.
+    {
+        constexpr uint32_t FRAMES = 320000;  // 10 seconds @ 32 kHz
+        const fx::q15 half = fx::Q15_ONE / 2;
+        const uint32_t first = (uint32_t)(((uint64_t)(uint16_t)half * FRAMES) >> 15);
+        const uint32_t count = first;
+
+        synth::Sample mono;
+        mono.channels = 1;
+        mono.data.resize(FRAMES);
+        for (uint32_t i = 0; i < FRAMES; ++i) mono.data[i] = (int16_t)(i & 0x7FFF);
+        const int16_t mono_first = mono.data[first];
+        synth::sample_trim_norm(mono, half, half);
+        assert(mono.num_frames() == count);
+        assert(mono.data.front() == mono_first);
+
+        synth::Sample stereo;
+        stereo.channels = 2;
+        stereo.data.resize((size_t)FRAMES * 2);
+        for (uint32_t i = 0; i < FRAMES; ++i) {
+            stereo.data[(size_t)i * 2] = (int16_t)(i & 0x7FFF);
+            stereo.data[(size_t)i * 2 + 1] = (int16_t)(-((int32_t)i & 0x7FFF));
+        }
+        const int16_t left_first = stereo.data[(size_t)first * 2];
+        const int16_t right_first = stereo.data[(size_t)first * 2 + 1];
+        synth::sample_trim_norm(stereo, half, half);
+        assert(stereo.num_frames() == count);
+        assert(stereo.data.front() == left_first);
+        assert(stereo.data[1] == right_first);
+    }
+
+    std::puts("slice detector + crop: ok");
     return 0;
 }

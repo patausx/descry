@@ -110,6 +110,16 @@ public:
 
     TrackState& track(int i) { return tracks_[i]; }
 
+    // Optional offline-export taps. Each non-null buffer receives one track at
+    // the post-DSP/post-fader/post-pan/post-duck point, before global sends and
+    // the master bus. Buffers are stereo interleaved and `frames` long.
+    void set_stem_taps(fx::q15* const taps[NUM_TRACKS]) {
+        for (int i = 0; i < NUM_TRACKS; ++i) stem_taps_[i] = taps ? taps[i] : nullptr;
+    }
+    void clear_stem_taps() {
+        for (auto& tap : stem_taps_) tap = nullptr;
+    }
+
     // add a voice to a track. finds a free slot, otherwise steals oldest active.
     // the stolen voice is removed (with a possible click - acceptable for voice stealing).
     // takes ownership of new_voice.
@@ -234,6 +244,7 @@ public:
 
 private:
     std::array<TrackState, NUM_TRACKS> tracks_;
+    fx::q15* stem_taps_[NUM_TRACKS] = {nullptr};  // non-owning; valid only during render()
     Voice* preview_voice_ = nullptr; // dedicated dry audition lane, owned by Mixer
     uint32_t age_counter_ = 0;
     void* audio_lock_ = nullptr;  // opaque RecursiveLock* (set by platform)

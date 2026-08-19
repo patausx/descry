@@ -330,9 +330,12 @@ static void apply_track_dsp(TrackState& t, fx::q15* buf, std::size_t frames) {
 void Mixer::render(fx::q15* out, std::size_t frames) {
     LockGuard _g(*this);
     std::memset(out, 0, frames * 2 * sizeof(fx::q15));
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        if (stem_taps_[t]) std::memset(stem_taps_[t], 0, frames * 2 * sizeof(fx::q15));
 
     std::size_t remaining = frames;
     fx::q15* dst = out;
+    std::size_t rendered_frames = 0;
 
     while (remaining > 0) {
         std::size_t chunk = remaining > 256 ? 256 : remaining;
@@ -345,7 +348,13 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
         std::memset(master_l_, 0, chunk * sizeof(fx::q31));
         std::memset(master_r_, 0, chunk * sizeof(fx::q31));
 
-        for (auto& t : tracks_) {
+        for (int track_index = 0; track_index < NUM_TRACKS; ++track_index) {
+            auto& t = tracks_[track_index];
+            // A muted track can still feed a dry stem tap. To keep sidechain and
+            // master behavior identical to live playback, muted non-tapped tracks
+            // remain skipped exactly as before.
+            const bool muted_to_mix = t.muted;
+            const bool needed_for_stem = stem_taps_[track_index] != nullptr;
             // per-track scope keeps scrolling even when silent - write flatline
             // and skip. (same decimation rate as the active path: every 4th frame)
             auto tscope_flat = [&t, chunk]() {
@@ -354,7 +363,7 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
                     t.tscope_pos = (t.tscope_pos + 1) % TrackState::TSCOPE_SIZE;
                 }
             };
-            if (t.muted) { tscope_flat(); continue; }
+            if (muted_to_mix && !needed_for_stem) { tscope_flat(); continue; }
 
             // check that there is at least one voice
             bool any_voice = false;
@@ -457,6 +466,15 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
                 if (ar > 32767) ar = 32767;
                 if ((fx::q15)al > peak) peak = (fx::q15)al;
                 if ((fx::q15)ar > peak) peak = (fx::q15)ar;
+                // dry stem tap: channel signal after all track processing,
+                // fader, pan and sidechain; before DEL/REV sends and master DSP.
+                if (stem_taps_[track_index]) {
+                    stem_taps_[track_index][(rendered_frames + i)*2 + 0] = sample_l;
+                    stem_taps_[track_index][(rendered_frames + i)*2 + 1] = sample_r;
+                }
+                // A persisted mute affects the reference mix, not recoverable DAW
+                // stems. The private export still advances/renders this track.
+                if (muted_to_mix) continue;
                 // sends: the clean pan'ed signal into each bus (q31 - doesn't clip from 8 tracks)
                 if (t.send_del > 0) {
                     del_bus_l_[i] += fx::mul_q15(sample_l, t.send_del);
@@ -583,6 +601,7 @@ void Mixer::render(fx::q15* out, std::size_t frames) {
 
         remaining -= chunk;
         dst += chunk * 2;
+        rendered_frames += chunk;
     }
 
     // === master clipper + DC blocker ===

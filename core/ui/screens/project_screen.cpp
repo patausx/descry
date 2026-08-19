@@ -89,18 +89,14 @@ void App::update_project(const InputState& in) {
     }
     if (in.y) { proj_action_slot = proj_slot_; proj_action = ProjAction::Save; }
     if (in.x) { proj_action_slot = proj_slot_; proj_action = ProjAction::New; }
-    // SELECT = render the song to sdmc:/3ds/descry/renders/<project name>.wav.
-    // the request flag was orphaned - render_song_to_wav() existed in main,
-    // the help promised it, but no UI path ever set the flag. now it has a home.
-    // issue #6: the export used to be a single fixed render.wav, so a second
-    // render clobbered the first. it now follows the project name (hold R to
-    // edit it right here) and main appends _NN instead of overwriting.
+    // SELECT = full reference mix; ZL+SELECT = one-pass dry DAW stem set.
     if (in.select_) {
         char base[32];
         seq::sanitize_basename(project_.name, base, sizeof(base));
         render_request_ = true;
+        render_stems_request_ = in.held_zl;
         std::snprintf(slot_status, sizeof(slot_status),
-            "RENDERING -> renders/%s.wav ...", base);
+            in.held_zl ? "RENDERING DRY STEMS -> %s ..." : "RENDERING MIX -> %s.wav ...", base);
         slot_status_frame_ = frame_;
     }
     if (in.b) {
@@ -131,7 +127,7 @@ void App::draw_project(Draw& d) {
 
     // === header: title + current project banner ===
     d.text(10, 14, "PROJECT", pal::HEADER, 1);
-    d.text(66, 14, "A=LOAD Y=SAVE X=NEW B=DEL(2x) SEL=RENDER", pal::FG_DIM);
+    d.text(66, 14, "A=LOAD Y=SAVE X=NEW B=DEL SEL=MIX ZL+SEL=STEMS", pal::FG_DIM);
 
     // current project name line — doubles as rename target when R held
     {
@@ -168,7 +164,7 @@ void App::draw_project(Draw& d) {
         char base[32];
         seq::sanitize_basename(project_.name, base, sizeof(base));
         char line[64];
-        std::snprintf(line, sizeof(line), "SEL -> renders/%s.wav", base);
+        std::snprintf(line, sizeof(line), "SEL=MIX %.15s.wav   ZL+SEL=DRY STEMS", base);
         d.text(10, 42, line, mod_r_ ? pal::FG_DIM : pal::HEADER);
     }
 

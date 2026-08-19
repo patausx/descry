@@ -265,10 +265,24 @@ void App::draw_slice_panel(Draw& d, int slot) {
     d.rect(SL_X, SL_Y + SL_H / 2, SL_W, 1, pal::GRID);
 
     uint32_t total = s.empty() ? 0 : s.num_frames();
+    if (smp_slice_view_slot_ != slot) {
+        smp_slice_view_slot_ = slot;
+        smp_slice_view_start_ = 0;
+        smp_slice_view_length_ = fx::Q15_ONE;
+    }
+    int view_start_norm = clamp_int(smp_slice_view_start_, 0, fx::Q15_ONE - 1);
+    int view_length_norm = clamp_int(smp_slice_view_length_, 1, fx::Q15_ONE);
+    if (view_start_norm + view_length_norm > fx::Q15_ONE)
+        view_start_norm = fx::Q15_ONE - view_length_norm;
+    uint32_t view_first = total ? (uint32_t)(((uint64_t)view_start_norm * total) >> 15) : 0;
+    uint32_t view_frames = total ? (uint32_t)(((uint64_t)view_length_norm * total) >> 15) : 0;
+    if (total && view_frames == 0) view_frames = 1;
+    if (view_frames > total - view_first) view_frames = total - view_first;
+    uint32_t view_last = view_first + view_frames;
     auto f2x = [&](uint32_t f) -> int {
-        if (total == 0) return SL_X;
-        if (f > total) f = total;
-        return SL_X + (int)((uint64_t)f * SL_W / total);
+        if (view_frames == 0) return SL_X;
+        return SL_X + (int)(((int64_t)f - (int64_t)view_first) * SL_W /
+                            (int64_t)view_frames);
     };
 
     uint32_t sorted[synth::Sample::MAX_CHOPS];
@@ -284,14 +298,18 @@ void App::draw_slice_panel(Draw& d, int slot) {
             uint32_t sel_end = total;
             for (int i = 0; i < cnt; ++i)
                 if (sorted[i] > sel_f && sorted[i] < sel_end) sel_end = sorted[i];
-            int ax = f2x(sel_f), bx = f2x(sel_end);
-            if (bx > ax) d.rect(ax, SL_Y, bx - ax, SL_H, with_alpha(pal::CURSOR, 26));
+            uint32_t shade_first = sel_f > view_first ? sel_f : view_first;
+            uint32_t shade_last = sel_end < view_last ? sel_end : view_last;
+            if (shade_last > shade_first) {
+                int ax = f2x(shade_first), bx = f2x(shade_last);
+                if (bx > ax) d.rect(ax, SL_Y, bx - ax, SL_H, with_alpha(pal::CURSOR, 26));
+            }
         }
 
-        // waveform (min/max per column, decimated)
+        // waveform (min/max per column) over the current pan/zoom viewport.
         for (int x = 0; x < SL_W; ++x) {
-            uint32_t a = ((uint64_t)x * total) / SL_W;
-            uint32_t b = ((uint64_t)(x + 1) * total) / SL_W;
+            uint32_t a = view_first + (uint32_t)(((uint64_t)x * view_frames) / SL_W);
+            uint32_t b = view_first + (uint32_t)(((uint64_t)(x + 1) * view_frames) / SL_W);
             if (b <= a) b = a + 1;
             if (b > total) b = total;
             int32_t mn = 32767, mx = -32768;
@@ -328,7 +346,7 @@ void App::draw_slice_panel(Draw& d, int slot) {
         // that plays it via >PHR) + full-height post.
         for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) {
             uint32_t cf = s.chops[i];
-            if (cf == 0xFFFFFFFFu) continue;
+            if (cf == 0xFFFFFFFFu || cf < view_first || cf > view_last) continue;
             int cx = f2x(cf);
             bool sel = (i == smp_chop_sel_);
             ui::Color col;
@@ -353,6 +371,7 @@ void App::draw_slice_panel(Draw& d, int slot) {
                 uint32_t rend = total;
                 for (int k = 0; k < cnt; ++k)
                     if (sorted[k] > cf && sorted[k] < rend) rend = sorted[k];
+                if (rend > view_last) rend = view_last;
                 int rx0 = cx, rx1 = f2x(rend);
                 for (int xx = rx0 + 2; xx < rx1 - 1; xx += 6)
                     d.rect(xx, SL_Y + SL_H - 3, 3, 2, pal::FG_HEX);
@@ -364,7 +383,7 @@ void App::draw_slice_panel(Draw& d, int slot) {
             auto* v = mixer_.primary_voice(t);
             if (v && v->active() && v->current_sample_slot() == slot) {
                 int pos = v->current_frame();
-                if (pos >= 0 && pos < (int)total)
+                if (pos >= (int)view_first && pos < (int)view_last)
                     d.rect(f2x((uint32_t)pos), SL_Y - 2, 1, SL_H + 4, pal::PLAYHEAD);
             }
         }
@@ -381,7 +400,10 @@ void App::draw_slice_panel(Draw& d, int slot) {
         std::snprintf(ib, sizeof(ib), "%d CHOPS", cnt);
     }
     d.text(SL_X, SL_INFO, ib, pal::FG);
-    d.text(SL_X + 168, SL_INFO, "TAP=SELECT/PLAY  DEL=REMOVE", pal::FG_DIM);
+    char zh[32];
+    int zoom10 = view_length_norm > 0 ? (fx::Q15_ONE * 10) / view_length_norm : 10;
+    std::snprintf(zh, sizeof(zh), "CPAD PAN/ZOOM %d.%dX", zoom10 / 10, zoom10 % 10);
+    d.text(SL_X + 164, SL_INFO, zh, pal::FG_DIM);
 }
 
 // touch handler for the slice panel. buttons row + tap/drag on the waveform.
@@ -508,7 +530,17 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
     int cx = x - SL_X;
     if (cx < 0) cx = 0;
     if (cx > SL_W) cx = SL_W;
-    uint32_t frame = (uint32_t)((uint64_t)cx * total / SL_W);
+    int view_start_norm = clamp_int(smp_slice_view_start_, 0, fx::Q15_ONE - 1);
+    int view_length_norm = clamp_int(smp_slice_view_length_, 1, fx::Q15_ONE);
+    if (view_start_norm + view_length_norm > fx::Q15_ONE)
+        view_start_norm = fx::Q15_ONE - view_length_norm;
+    uint32_t view_first = (uint32_t)(((uint64_t)view_start_norm * total) >> 15);
+    uint32_t view_frames = (uint32_t)(((uint64_t)view_length_norm * total) >> 15);
+    if (view_frames == 0) view_frames = 1;
+    if (view_frames > total - view_first) view_frames = total - view_first;
+    uint32_t view_last = view_first + view_frames;
+    uint32_t frame = view_first + (uint32_t)((uint64_t)cx * view_frames / SL_W);
+    if (frame >= total) frame = total - 1;
 
     if (is_move) {
         // drag the selected chop (zero-crossing snapped) - but ONLY if this
@@ -528,8 +560,8 @@ void App::slice_panel_touch(int x, int y, int slot, bool is_move) {
     int best = -1; uint32_t best_d = 0xFFFFFFFFu;
     for (int i = 0; i < synth::Sample::MAX_CHOPS; ++i) {
         uint32_t cf = s.chops[i];
-        if (cf == 0xFFFFFFFFu) continue;
-        int ckx = (int)((uint64_t)cf * SL_W / total);
+        if (cf == 0xFFFFFFFFu || cf < view_first || cf > view_last) continue;
+        int ckx = (int)(((uint64_t)(cf - view_first) * SL_W) / view_frames);
         uint32_t dd = (uint32_t)std::abs(ckx - cx);
         if (dd < best_d) { best_d = dd; best = i; }
     }
@@ -610,16 +642,34 @@ void App::draw_wave_panel(Draw& d, int slot) {
         return;
     }
 
-    // min/max column waveform (dim; the active window gets the bright pass)
+    // min/max waveform over a UI-only viewport. Crop START/LENGTH stay separate:
+    // zooming improves touch precision without changing playback or the crop range.
+    if (smp_wave_view_slot_ != slot) {
+        smp_wave_view_slot_ = slot;
+        smp_wave_view_start_ = 0;
+        smp_wave_view_length_ = fx::Q15_ONE;
+    }
+    int view_start_norm = clamp_int(smp_wave_view_start_, 0, fx::Q15_ONE - 1);
+    int view_length_norm = clamp_int(smp_wave_view_length_, 1, fx::Q15_ONE);
+    if (view_start_norm + view_length_norm > fx::Q15_ONE)
+        view_start_norm = fx::Q15_ONE - view_length_norm;
+    uint32_t view_first = (uint32_t)(((uint64_t)view_start_norm * total) >> 15);
+    uint32_t view_frames = (uint32_t)(((uint64_t)view_length_norm * total) >> 15);
+    if (view_frames == 0) view_frames = 1;
+    if (view_frames > total - view_first) view_frames = total - view_first;
+    uint32_t view_last = view_first + view_frames;
+
     uint32_t sframe = ((uint64_t)sp.start * total) >> 15;
-    uint32_t eframe = sframe + (((uint64_t)sp.length * total) >> 15);
+    uint32_t eframe = sframe + (uint32_t)(((uint64_t)sp.length * total) >> 15);
     if (eframe > total) eframe = total;
-    auto f2x = [&](uint32_t f) { return WV_X + (int)((uint64_t)f * WV_W / total); };
+    auto f2x = [&](uint32_t f) {
+        return WV_X + (int)(((int64_t)f - (int64_t)view_first) * WV_W / (int64_t)view_frames);
+    };
     int sx = f2x(sframe), ex = f2x(eframe);
 
     for (int x = 0; x < WV_W; ++x) {
-        uint32_t a = ((uint64_t)x * total) / WV_W;
-        uint32_t b = ((uint64_t)(x + 1) * total) / WV_W;
+        uint32_t a = view_first + (uint32_t)((uint64_t)x * view_frames / WV_W);
+        uint32_t b = view_first + (uint32_t)((uint64_t)(x + 1) * view_frames / WV_W);
         if (b <= a) b = a + 1;
         if (b > total) b = total;
         int32_t mn = 32767, mx = -32768;
@@ -635,7 +685,8 @@ void App::draw_wave_panel(Draw& d, int slot) {
         if (yb >= WV_Y + WV_H) yb = WV_Y + WV_H - 1;
         if (yb < yt) { int t = yt; yt = yb; yb = t; }
         // inside the play window = bright, outside = dim (no shading veils)
-        bool inside = (WV_X + x >= sx && WV_X + x <= ex);
+        bool inside = (a >= sframe && a <= eframe) || (b >= sframe && b <= eframe) ||
+                      (a <= sframe && b >= eframe);
         d.rect(WV_X + x, yt, 1, yb - yt + 1, inside ? pal::PLAY : pal::PLAY_BG);
     }
 
@@ -653,24 +704,34 @@ void App::draw_wave_panel(Draw& d, int slot) {
 
     // === marker grab handles ===
     // start: green post + flag pointing INTO the window (right)
-    d.rect(sx, WV_Y - 3, 1, WV_H + 6, pal::TRACK1);
-    d.rect(sx, WV_Y - 3, 6, 5, pal::TRACK1);
-    d.rect(sx + 1, WV_Y + 2, 4, 2, with_alpha(pal::TRACK1, 140));
+    if (sframe >= view_first && sframe <= view_last) {
+        d.rect(sx, WV_Y - 3, 1, WV_H + 6, pal::TRACK1);
+        d.rect(sx, WV_Y - 3, 6, 5, pal::TRACK1);
+        d.rect(sx + 1, WV_Y + 2, 4, 2, with_alpha(pal::TRACK1, 140));
+    }
     // end: terracotta post + flag pointing left
-    d.rect(ex, WV_Y - 3, 1, WV_H + 6, pal::RECORD);
-    d.rect(ex - 5, WV_Y - 3, 6, 5, pal::RECORD);
-    d.rect(ex - 4, WV_Y + 2, 4, 2, with_alpha(pal::RECORD, 140));
+    if (eframe >= view_first && eframe <= view_last) {
+        d.rect(ex, WV_Y - 3, 1, WV_H + 6, pal::RECORD);
+        d.rect(ex - 5, WV_Y - 3, 6, 5, pal::RECORD);
+        d.rect(ex - 4, WV_Y + 2, 4, 2, with_alpha(pal::RECORD, 140));
+    }
 
     // loop markers: ochre posts with BOTTOM flags (visually distinct from s/e)
     const bool loops = (sp.play_mode == synth::PlayMode::FwdLoop ||
                         sp.play_mode == synth::PlayMode::RevLoop);
     if (s.loop_end > s.loop_start) {
         ui::Color lc = loops ? pal::HEADER : with_alpha(pal::HEADER, 110);
-        int lsx = f2x(s.loop_start), lex = f2x(s.loop_end > total ? total : s.loop_end);
-        d.rect(lsx, WV_Y, 1, WV_H, lc);
-        d.rect(lex, WV_Y, 1, WV_H, lc);
-        d.rect(lsx, WV_Y + WV_H - 4, 6, 4, lc);
-        d.rect(lex - 5, WV_Y + WV_H - 4, 6, 4, lc);
+        uint32_t ls = s.loop_start, le = s.loop_end > total ? total : s.loop_end;
+        if (ls >= view_first && ls <= view_last) {
+            int lsx = f2x(ls);
+            d.rect(lsx, WV_Y, 1, WV_H, lc);
+            d.rect(lsx, WV_Y + WV_H - 4, 6, 4, lc);
+        }
+        if (le >= view_first && le <= view_last) {
+            int lex = f2x(le);
+            d.rect(lex, WV_Y, 1, WV_H, lc);
+            d.rect(lex - 5, WV_Y + WV_H - 4, 6, 4, lc);
+        }
     }
 
     // live playhead
@@ -678,7 +739,7 @@ void App::draw_wave_panel(Draw& d, int slot) {
         auto* v = mixer_.primary_voice(t);
         if (v && v->active() && v->current_sample_slot() == slot) {
             int pos = v->current_frame();
-            if (pos >= 0 && pos < (int)total)
+            if (pos >= (int)view_first && pos < (int)view_last)
                 d.rect(f2x((uint32_t)pos), WV_Y - 4, 1, WV_H + 8, pal::PLAYHEAD);
         }
     }
@@ -692,7 +753,10 @@ void App::draw_wave_panel(Draw& d, int slot) {
     std::snprintf(ib, sizeof(ib), "%.2fs  ROOT %s (A/B)  WIN %d-%d%%",
                   total / 32000.0f, rn, spct, spct + lpct > 100 ? 100 : spct + lpct);
     d.text(WV_X, WV_INFO, ib, pal::FG);
-    d.text(WV_X + 210, WV_INFO, "CPAD X/Y SCRUB/ZOOM", pal::FG_DIM);
+    int zoom10 = (fx::Q15_ONE * 10) / view_length_norm;
+    char zh[24];
+    std::snprintf(zh, sizeof(zh), "CPAD %d.%dX PAN/ZOOM", zoom10 / 10, zoom10 % 10);
+    d.text(WV_X + 202, WV_INFO, zh, pal::FG_DIM);
 }
 
 // touch: op buttons row OR drag nearest start/end marker.
@@ -708,7 +772,8 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
         int i = (x - WV_X) / WOP_W;
         if (i < 0 || i >= WOP_N) return;
         uint32_t sfr = ((uint64_t)sp.start * total) >> 15;
-        uint32_t efr = sfr + (((uint64_t)sp.length * total) >> 15);
+        uint32_t efr = sfr + (uint32_t)(((uint64_t)sp.length * total) >> 15);
+        if (efr > total) efr = total;
         // data-index range (frames * channels) for the fade ops
         uint32_t da = sfr * s.channels, db = efr * s.channels;
         // >WT is non-destructive: render the visible window into a persistent
@@ -763,6 +828,8 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
             if (i == 6) {
                 sp.start = 0;
                 sp.length = fx::Q15_ONE;
+                smp_slice_view_slot_ = -1;  // cropped sample has new frame coordinates
+                smp_wave_view_slot_ = -1;
             }
         }
         sample_motion_kind_ = 1;
@@ -776,12 +843,22 @@ void App::wave_panel_touch(int x, int y, int slot, bool is_move) {
     int cx = x - WV_X;
     if (cx < 0) cx = 0;
     if (cx > WV_W) cx = WV_W;
-    uint32_t frame = (uint32_t)((uint64_t)cx * total / WV_W);
+    int view_start_norm = clamp_int(smp_wave_view_start_, 0, fx::Q15_ONE - 1);
+    int view_length_norm = clamp_int(smp_wave_view_length_, 1, fx::Q15_ONE);
+    if (view_start_norm + view_length_norm > fx::Q15_ONE)
+        view_start_norm = fx::Q15_ONE - view_length_norm;
+    uint32_t view_first = (uint32_t)(((uint64_t)view_start_norm * total) >> 15);
+    uint32_t view_frames = (uint32_t)(((uint64_t)view_length_norm * total) >> 15);
+    if (view_frames == 0) view_frames = 1;
+    if (view_frames > total - view_first) view_frames = total - view_first;
+    uint32_t frame = view_first + (uint32_t)((uint64_t)cx * view_frames / WV_W);
+    if (frame >= total) frame = total - 1;
     // zero-crossing snap for click-free trims
     frame = synth::find_zero_crossing_near(s, frame);
 
     uint32_t sfr = ((uint64_t)sp.start * total) >> 15;
-    uint32_t efr = sfr + (((uint64_t)sp.length * total) >> 15);
+    uint32_t efr = sfr + (uint32_t)(((uint64_t)sp.length * total) >> 15);
+    if (efr > total) efr = total;
     // pick nearest of the 4 markers (start/end/loop_s/loop_e) on first touch;
     // during move keep dragging the same one via smp_drag_kind_ (1/2/3/4)
     if (!is_move) {
@@ -1152,7 +1229,10 @@ void App::load_panel_input(const InputState& in, int slot) {
         // memory is one preview buffer, not old+new+decoder output.
         if (wav_preview_active_) stop_preview();
         synth::Sample tmp;
-        constexpr int PREVIEW_FRAMES = 32000 * 5;
+        // Two seconds are enough to identify a kick/break/pad and cut preview
+        // latency/memory by 60% versus the old five-second audition. Full A-load
+        // still imports up to 15 seconds; only non-destructive X-preview is short.
+        constexpr int PREVIEW_FRAMES = 32000 * 2;
         auto r = synth::load_wav_to_sample(path, tmp, 32000, PREVIEW_FRAMES);
         if ((int)r >= 0) {
             basename_to_sample_name(wav_files_[wav_sel_], tmp.name, sizeof(tmp.name));
@@ -1165,7 +1245,7 @@ void App::load_panel_input(const InputState& in, int slot) {
             if (mixer_.start_preview_voice(v, wav_preview_sample_.root_note, 110)) {
                 wav_preview_active_ = true;
                 std::snprintf(smp_status_, sizeof(smp_status_), "%s%s",
-                              r == synth::WavLoadResult::Truncated ? "PREVIEW 5S: " : "PREVIEW: ",
+                              r == synth::WavLoadResult::Truncated ? "PREVIEW 2S: " : "PREVIEW: ",
                               wav_preview_sample_.name);
             } else {
                 wav_preview_active_ = false;
@@ -1235,6 +1315,8 @@ void App::load_panel_input(const InputState& in, int slot) {
                 mixer_.cut_slot_voices(slot);
                 s = std::move(tmp);
             }
+            smp_slice_view_slot_ = -1;  // imported audio gets a fresh full viewport
+            smp_wave_view_slot_ = -1;
             mark_project_dirty();
             std::snprintf(smp_status_, sizeof(smp_status_), "%s: %s",
                           r == synth::WavLoadResult::Truncated ? "LOADED 15S" : "LOADED", s.name);
@@ -1370,37 +1452,100 @@ void App::update_instrument(const InputState& in) {
     // Circle pad is reserved here for the sampler WAVE panel: direct scrub/zoom.
     auto& inst = project_.instruments[cur_inst_];
     const bool is_drum = (inst.type == seq::InstrumentType::DrumKit);
+    const bool sample_backed = inst.type == seq::InstrumentType::Sampler;
+
+    // TYPE remains editable even while a sampler bottom panel is open. Previously
+    // WAVE/SLICE/LOAD grabbed A/B/X/Y first, so changing SAMPLER -> another engine
+    // could trigger crop/slicing/browser actions and required returning to KB.
+    const bool panel_type_edit = sample_backed && inst_panel_ != InstPanel::Kb && inst_row_ == SR_TYPE;
+    if (panel_type_edit && (in.a || in.b || in.x || in.y || in.encoder_delta)) {
+        int delta = in.a ? +1 : in.b ? -1 : in.x ? +16 : in.y ? -16 : in.encoder_delta;
+        snapshot_inst();
+        set_inst_type(inst, (int)inst.type + delta);
+        inst_row_ = 0;
+        inst_panel_ = InstPanel::Kb;  // destination may not be sample-backed
+        smp_touch_active_ = false;
+        smp_drag_kind_ = 0;
+        smp_status_[0] = 0;
+        inst_motion_kind_ = 2;
+        inst_motion_frame_ = frame_;
+        push_live_inst_params(cur_inst_);
+        commit_inst();
+        return;
+    }
 
     // LOAD browser owns navigation/actions before the hidden instrument grid can
     // react to the same D-pad press. X previews, A imports, B stops/goes up,
     // Y rescans (R+SELECT is globally consumed by screenshot handling).
-    const bool sample_backed = inst.type == seq::InstrumentType::Sampler;
     if (sample_backed && inst_panel_ == InstPanel::Load) {
         const int slot = inst.sampler.sample_slot;
         load_panel_input(in, slot);
         return;
     }
 
-    // In WAVE, circle X scrubs the playback window and circle Y zooms it.
-    // Up = zoom in (shorter window), down = zoom out. Values stay normalized,
-    // so this is cheap and deterministic even for very long samples.
+    // In SLICE, the Circle Pad controls a UI-only viewport. Y zooms around the
+    // viewport centre; X pans by one eighth of the visible range per pulse.
+    // It never changes playback START/LENGTH or dirties the project.
+    if (sample_backed && inst_panel_ == InstPanel::Slice &&
+        (in.analog_x || in.analog_y)) {
+        const int slot = inst.sampler.sample_slot;
+        if (smp_slice_view_slot_ != slot) {
+            smp_slice_view_slot_ = slot;
+            smp_slice_view_start_ = 0;
+            smp_slice_view_length_ = fx::Q15_ONE;
+        }
+        int start = smp_slice_view_start_;
+        int length = smp_slice_view_length_;
+        constexpr int MIN_VIEW = fx::Q15_ONE / 256;  // up to 256x precision
+        if (in.analog_y) {
+            int zoom_step = length / 8;
+            if (zoom_step < MIN_VIEW) zoom_step = MIN_VIEW;
+            int next_length = clamp_int(length - in.analog_y * zoom_step,
+                                        MIN_VIEW, fx::Q15_ONE);
+            start += (length - next_length) / 2;       // keep centre anchored
+            length = next_length;
+        }
+        if (in.analog_x) {
+            int pan_step = length / 8;
+            if (pan_step < 1) pan_step = 1;
+            start += in.analog_x * pan_step;
+        }
+        start = clamp_int(start, 0, fx::Q15_ONE - length);
+        smp_slice_view_start_ = start;
+        smp_slice_view_length_ = length;
+        return;
+    }
+
+    // In WAVE the Circle Pad controls a UI-only precision viewport, matching
+    // SLICE: Y zooms around centre and X pans. Crop START/LENGTH are changed by
+    // the markers/parameter rows, not secretly by zooming the display.
     if (sample_backed && inst_panel_ == InstPanel::Wave &&
         (in.analog_x || in.analog_y)) {
-        snapshot_inst();
-        int start = inst.sampler.start;
-        int length = inst.sampler.length;
-        constexpr int SCRUB_STEP = fx::Q15_ONE / 128;
-        constexpr int ZOOM_STEP  = fx::Q15_ONE / 64;
-        start += in.analog_x * SCRUB_STEP;
-        length -= in.analog_y * ZOOM_STEP;
-        length = clamp_int(length, 1, fx::Q15_ONE);
-        int max_start = fx::Q15_ONE - length;
-        start = clamp_int(start, 0, max_start);
-        inst.sampler.start = (fx::q15)start;
-        inst.sampler.length = (fx::q15)length;
-        edit_flash_frame_ = frame_;
-        push_live_inst_params(cur_inst_);
-        commit_inst();
+        const int slot = inst.sampler.sample_slot;
+        if (smp_wave_view_slot_ != slot) {
+            smp_wave_view_slot_ = slot;
+            smp_wave_view_start_ = 0;
+            smp_wave_view_length_ = fx::Q15_ONE;
+        }
+        int start = smp_wave_view_start_;
+        int length = smp_wave_view_length_;
+        constexpr int MIN_VIEW = fx::Q15_ONE / 256;
+        if (in.analog_y) {
+            int zoom_step = length / 8;
+            if (zoom_step < MIN_VIEW) zoom_step = MIN_VIEW;
+            int next_length = clamp_int(length - in.analog_y * zoom_step,
+                                        MIN_VIEW, fx::Q15_ONE);
+            start += (length - next_length) / 2;
+            length = next_length;
+        }
+        if (in.analog_x) {
+            int pan_step = length / 8;
+            if (pan_step < 1) pan_step = 1;
+            start += in.analog_x * pan_step;
+        }
+        start = clamp_int(start, 0, fx::Q15_ONE - length);
+        smp_wave_view_start_ = start;
+        smp_wave_view_length_ = length;
         return;
     }
 

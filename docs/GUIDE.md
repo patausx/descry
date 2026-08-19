@@ -190,6 +190,9 @@ section 4). common keys:
 | L+A | clone instrument to a free slot |
 | ZL+SELECT | focus the **FX defaults** strip (see 5) |
 
+when the cursor is on `TYPE`, engine changes still work while WAVE/SLICE/LOAD is
+open; the panel closes automatically after leaving the Sampler engine.
+
 ### table
 
 mod tables: 3 FX lanes × 16 rows, looped while a note is alive.
@@ -243,20 +246,29 @@ globally and save with the project.
 | X | new project |
 | B | delete (press twice to confirm) |
 | hold R | **rename mode**: A/B cycle the character, left/right move, X clear |
-| SELECT | **render the song to WAV** |
+| SELECT | **render the full reference mix to WAV** |
+| ZL+SELECT | **render a dry DAW stem set** (mix + active tracks) |
 
-the render lands in `renders/` named after the current project, and the view
-shows the exact target filename (`SEL -> renders/NAME.wav`) *before* you press
-SELECT — so rename first (hold R), then render. an existing take is never
-overwritten: repeat renders become `NAME_01.wav`, `NAME_02.wav`, … which means
-you can bounce several projects in one sitting and pull them all off the SD card
-later. characters the FAT filesystem dislikes are stripped, spaces become `_`.
+`SELECT` exports the same mix you hear, including channel faders, master volume,
+mutes, global delay/reverb and sidechain duck. `ZL+SELECT` exports one synchronized
+set in a single pass:
 
-the export is the **same mix you hear**: channel faders, master volume, mutes,
-delay/reverb settings and the sidechain duck all go into the file. it runs until
-the song has played through once, then keeps rendering ~3 s so delay and reverb
-tails ring out instead of being cut off. rests inside the song are fine — only a
-project that never makes a sound at all is reported as a failed render.
+```text
+NAME_mix.wav
+NAME_t1.wav ... NAME_t8.wav   (only tracks used by the arrangement)
+```
+
+track stems retain instrument/note FX, filter, bitcrush/downsample, channel fader,
+pan and sidechain duck. They deliberately exclude global delay/reverb and master
+bus processing, so a DAW can supply its own effects and final mix. Muted arranged
+tracks are still exported as recoverable stems. Every file starts together and has
+the same length; the mix carries the ~3 s global wet tail while stems retain only
+their own instrument release tails (silence otherwise).
+
+exports land in `renders/` and never overwrite an existing take. Repeat mix renders
+become `NAME_01.wav`, `NAME_02.wav`, …; stem sets reserve a coherent suffix such as
+`NAME_01_mix.wav` + `NAME_01_t1.wav`. Rename first with hold R. FAT-hostile
+characters are stripped and spaces become `_`.
 
 autosave writes `session.tr3d` on exit.
 
@@ -344,8 +356,11 @@ the bottom screen has five tabs: **KB / WAVE / SLICE / LOAD / REC**.
 
 - **WAVE** — sample editor. op buttons: `NORM · REV · FAD< · FAD> · G+3 ·
   G-3 · CROP · COPY · >WT`, drag the start/end markers on the waveform, A/B set
-  the root note. `X` or `>WT` converts the visible window into a normalized,
-  DC-free persistent USER wavetable and creates a Wavsynth instrument using it.
+  the root note. **Circle Pad up/down** zooms the waveform viewport up to 256×;
+  **left/right** pans it. This viewport is independent of the crop/play window,
+  so touch marker movement becomes genuinely frame-precise without silently
+  changing `START/LENGTH`. `X` or `>WT` converts the visible playback window into
+  a normalized, DC-free persistent USER wavetable and creates a Wavsynth instrument.
 - **SLICE** — the break chopper. up to 32 markers per sample.
   - buttons: `TRNS` = transient auto-chop (press again to cycle LO/MID/HI
     sensitivity), `EQ n` = equal slice (press again to cycle 4/8/16/32),
@@ -357,16 +372,21 @@ the bottom screen has five tabs: **KB / WAVE / SLICE / LOAD / REC**.
     `>KIT` is **zero-copy**: all pads reference slices of the original sample,
     so it works even when all 64 SampleBank slots are occupied.
   - waveform gestures: **tap** a marker or region = select + audition that
-    slice; **drag from a marker** = move it. To delete, select a slice and press
-    the explicit `DEL` button — double-tap deletion was removed because it is
-    unreliable on the 3DS resistive touchscreen. The first cut at frame zero is
-    locked; after deletion selection advances right (or left at the end).
-    Marker movement snaps to zero crossings automatically (no clicks).
+    slice; **drag from a marker** = move it. **Circle Pad up/down** zooms the
+    waveform around its centre (up to 256×); **left/right** pans the zoomed
+    viewport. Zoom is editor-only and does not alter sample playback. To delete,
+    select a slice and press the explicit `DEL` button — double-tap deletion was
+    removed because it is unreliable on the 3DS resistive touchscreen. The first
+    cut at frame zero is locked; after deletion selection advances right (or left
+    at the end). Marker movement snaps to zero crossings automatically (no clicks).
   - `>PHR` is the one-button break workflow: the instrument flips to
     chromatic-slice mode and each slice lands on the step nearest its real
     position in time (quantized to the 16-step grid), so uneven transient
     chops keep their groove. press play and the break plays like the source —
     then shuffle steps, reverse a slice, add `RET`, transpose in the chain.
+- **LOAD** — WAV browser with folders; `X` auditions a fast two-second preview
+  without touching the current SampleBank slot, while `A` performs the full import
+  (up to 15 seconds / the available sample RAM budget).
   - re-pressing `>KIT` on an existing `chop NN` kit **rebuilds** its pads from
     the current markers (move a marker, press again, pads follow).
   - note: `TRNS`/`EQ`/`CLR` reset per-slice reverse flags, since re-chopping

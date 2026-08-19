@@ -278,8 +278,11 @@ void App::touch(int x, int y) {
         return;
     }
 
-    // === hint strip (y44..62): tap = open the in-app manual ("?" badge) ===
-    if (y >= 44 && y < 63) {
+    // === manual button only ===
+    // The old handler made the entire two-line hint strip clickable, so taps on
+    // unrelated hints kept opening HELP. Match the visible 14x16 '?' button with
+    // a small 2px forgiveness margin for the resistive touch screen.
+    if (x >= 300 && x < 318 && y >= 43 && y < 63) {
         open_help();
         return;
     }

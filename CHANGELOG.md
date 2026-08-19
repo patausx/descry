@@ -11,6 +11,36 @@ with binaries, checksums and the long-form notes.
 
 ## [unreleased]
 
+## [1.0.7] — 2026-08-20
+
+### added
+- **one-pass dry stem export** — `ZL+SELECT` in Project writes a synchronized
+  reference mix plus every arranged track as `NAME_mix.wav` / `NAME_t1.wav`…`t8.wav`.
+  stems retain track DSP, fader, pan and sidechain duck but omit global delay,
+  reverb and master processing for clean DAW mixing; empty tracks are skipped
+- **precision sampler viewports** — Circle Pad up/down zooms both WAVE and SLICE
+  waveforms up to 256× and left/right pans them; crop and slice markers, touch
+  dragging and live playheads all follow the zoomed frame range without changing
+  playback parameters
+- **faster WAV audition** — LOAD-panel `X` preview decodes a bounded two-second
+  audition instead of waiting for five seconds of long source material; full
+  `A` imports keep the existing 15-second capacity
+
+### fixed
+- **sampler panels no longer hijack TYPE edits** — with the cursor on `TYPE`,
+  `A/B/X/Y` changes the instrument engine directly from WAVE/SLICE/LOAD instead
+  of firing crop/slice/browser actions or forcing a return to KB
+- the in-app manual now opens only from the visible `?` button instead of an
+  invisible hit target spanning the entire hint strip
+- mixer faders on both screens use restrained theme-derived depth bands and a
+  narrow highlight instead of dead flat single-colour fills
+- sampler `CROP` no longer overflows its position math on multi-second samples
+  and keeps exact stereo frame boundaries instead of returning one random hit —
+  reported by **@HexManic** in [#7]; thanks for the clear report and zoom request
+- offline export now sequences with tick-accurate sub-chunks and renders from an
+  immutable project snapshot; coherent stem takes are published transactionally
+  and partial/failed sets are removed
+
 ## [1.0.6] — 2026-08-15
 
 ### added
@@ -198,7 +228,8 @@ five synth engines (wavsynth / 4-op FM / sampler / drumkit / DSN analog voice),
 per-track DSP, delay + reverb, KAOSS-style XY pad, mic sampling, user
 wavetables, 6 colour themes. New 3DS / New 2DS only.
 
-[unreleased]: https://github.com/patausx/descry/compare/v1.0.6...HEAD
+[unreleased]: https://github.com/patausx/descry/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/patausx/descry/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/patausx/descry/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/patausx/descry/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/patausx/descry/compare/v1.0.3...v1.0.4
@@ -211,3 +242,4 @@ wavetables, 6 colour themes. New 3DS / New 2DS only.
 [#3]: https://github.com/patausx/descry/issues/3
 [#5]: https://github.com/patausx/descry/issues/5
 [#6]: https://github.com/patausx/descry/issues/6
+[#7]: https://github.com/patausx/descry/issues/7
