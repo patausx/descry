@@ -100,13 +100,13 @@ old 3DS is not supported.
 
 grab the [latest release](https://github.com/patausx/descry/releases/latest):
 
-- **CIA** — install `descry.cia` from v1.0.6 with FBI if you want a Home Menu
-  install; v1.0.7 currently ships the updated 3DSX only
+- **CIA** — install `descry.cia` with FBI for a Home Menu install
 - **3DSX** — copy `descry.3dsx` to `/3ds/descry/descry.3dsx` on the SD
   card and launch it from the Homebrew Launcher
+- **3DS** — use `descry.3ds` with a compatible flashcart or emulator
 
-v1.0.7 does not repeat the CCI or separate IRONLUNG bundle; those remain available
-on the older release pages.
+v1.0.7 does not repeat the separate IRONLUNG bundle; it remains available on the
+older release page.
 
 ## build
 
