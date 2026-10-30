@@ -1,98 +1,59 @@
 #!/usr/bin/env python3
-# descry — github README banner, acid colorway
-#   wordmark (from make_wordmark grid) + tagline set in the engine's own 6x8 font
-# outputs: branding/final/banner.png (+ copy for docs/)
-import importlib.util, os, re
-from PIL import Image
+"""Render the README-only wordmark; leave application branding untouched.
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-def load(name):
-    spec = importlib.util.spec_from_file_location(name, f"{HERE}/{name}.py")
-    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-    return m
+The canonical acid wordmark keeps its original pixel geometry and ink colours.
+Only its background changes; the README has no tagline or decorative rule.
+Requires Pillow. Run with --check to verify docs/banner.png without writing it.
+"""
+from __future__ import annotations
 
-wm = load("make_wordmark")
+import argparse
+from pathlib import Path
 
-BG   = (0x12,0x14,0x0A)
-BASE = (0xC8,0xE0,0x30)
-def lighten(c,f): return tuple(min(255,int(x+(255-x)*f)) for x in c)
-def darken(c,f):  return tuple(int(x*(1-f)) for x in c)
-HI  = lighten(BASE, 0.45)
-SH  = darken(BASE, 0.30)
-DIM = darken(BASE, 0.55)          # tagline: quieter than the mark
+from PIL import Image, ImageChops
 
-# ---- parse the engine's 6x8 font straight from core/ui/font.cpp ----
-def load_font():
-    src = open(f"{HERE}/../core/ui/font.cpp").read()
-    src = src[src.index("font_6x8[96][8]"):]
-    src = re.sub(r"R\(([01]),([01]),([01]),([01]),([01]),([01])\)",
-                 lambda m: str(int("".join(m.groups()), 2)), src)
-    blocks = re.findall(r"\{([^{}]*)\}", src[src.index("{")+1:])
-    font = {}
-    for i, b in enumerate(blocks[:96]):
-        rows = [int(x) for x in re.findall(r"\d+", b)]
-        rows += [0]*(8-len(rows))
-        font[chr(0x20+i)] = rows
-    return font
+ROOT = Path(__file__).resolve().parent.parent
+SOURCE = ROOT / "branding/final/wordmark_acid.png"
+OUTPUT = ROOT / "docs/banner.png"
+BACKGROUND = (0x21, 0x28, 0x30)
+SIZE = (744, 332)
 
-FONT = load_font()
 
-def text_size(s): return len(s)*6, 8
+def render() -> Image.Image:
+    with Image.open(SOURCE) as image:
+        source = image.convert("RGB")
+    old_background = Image.new("RGB", source.size, source.getpixel((0, 0)))
+    mask = ImageChops.difference(source, old_background).convert("L")
+    mask = mask.point(lambda value: 255 if value else 0)
+    bounds = mask.getbbox()
+    if bounds is None:
+        raise ValueError("canonical wordmark is empty")
+    ink = source.crop(bounds)
+    if ink.width > SIZE[0] or ink.height > SIZE[1]:
+        raise ValueError("canonical wordmark does not fit the README canvas")
+    offset = ((SIZE[0] - ink.width) // 2, (SIZE[1] - ink.height) // 2)
+    result = Image.new("RGB", SIZE, BACKGROUND)
+    result.paste(ink, offset, mask.crop(bounds))
+    return result
 
-def draw_text(px, s, ox, oy, color, scale=1):
-    for ci, ch in enumerate(s.upper()):
-        rows = FONT.get(ch, FONT[' '])
-        for y in range(8):
-            for x in range(6):
-                if rows[y] & (1 << (5-x)):
-                    X, Y = ox+(ci*6+x)*scale, oy+y*scale
-                    for dy in range(scale):
-                        for dx in range(scale):
-                            px[X+dx, Y+dy] = color
 
-# ---- compose at native cells, then integer-upscale ----
-TAG = "A MUSIC TRACKER + SYNTHESIZER FOR THE NEW NINTENDO 3DS"
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    expected = render()
+    if args.check:
+        if not OUTPUT.is_file():
+            parser.exit(1, "missing README banner; run branding/make_banner.py\n")
+        with Image.open(OUTPUT) as image:
+            actual = image.convert("RGB")
+        if actual.size != expected.size or actual.tobytes() != expected.tobytes():
+            parser.exit(1, "README banner differs; run branding/make_banner.py\n")
+        print("PASS: logo-only README banner, original ink, background #212830")
+    else:
+        expected.save(OUTPUT, optimize=True)
+        print(f"README banner {expected.width}x{expected.height} -> {OUTPUT.relative_to(ROOT)}")
 
-def make_banner(path, cellpx=6, scale_tag=2):
-    gw, gh = wm.GW, wm.GH                       # wordmark cells
-    mw, mh = gw*cellpx, gh*cellpx               # wordmark pixels
-    tw, th = text_size(TAG)
-    tw, th = tw*scale_tag, th*scale_tag
-    pad_x, pad_top, gap, pad_bot = 48, 40, 22, 40
-    W = max(mw, tw) + pad_x*2
-    H = pad_top + mh + gap + th + gap + 2 + pad_bot
-
-    im = Image.new("RGB", (W, H), BG)
-    px = im.load()
-
-    # wordmark, bevel-lit like the rest of the kit
-    ox, oy = (W-mw)//2, pad_top
-    for gy in range(gh):
-        for gx in range(gw):
-            if not wm.cell(gx, gy): continue
-            lit    = not wm.cell(gx, gy-1) or not wm.cell(gx-1, gy)
-            shaded = not wm.cell(gx, gy+1) or not wm.cell(gx+1, gy)
-            c = HI if (lit and not shaded) else SH if (shaded and not lit) else BASE
-            X, Y = ox+gx*cellpx, oy+gy*cellpx
-            for dy in range(cellpx):
-                for dx in range(cellpx):
-                    px[X+dx, Y+dy] = c
-
-    # tagline in the tracker's own font
-    ty = oy + mh + gap
-    draw_text(px, TAG, (W-tw)//2, ty, DIM, scale_tag)
-
-    # thin acid rule under the tagline
-    ry = ty + th + gap
-    for x in range(pad_x, W-pad_x):
-        px[x, ry] = SH
-        px[x, ry+1] = darken(BASE, 0.62)
-
-    im.save(path)
-    print(f"banner {W}x{H} -> {path}")
-    return im
 
 if __name__ == "__main__":
-    out = f"{HERE}/final"
-    os.makedirs(out, exist_ok=True)
-    make_banner(f"{out}/banner.png")
+    main()

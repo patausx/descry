@@ -1,172 +1,27 @@
-<p align="center"><img src="docs/banner.png" alt="descry — a music tracker + synthesizer for the New Nintendo 3DS"></p>
+<p align="center"><img src="docs/banner.png" alt="descry wordmark"></p>
 
-native homebrew, fixed-point DSP, built-in mic sampler. everything runs on the device.
+**a tracker and synthesizer for the new nintendo 3ds.**
 
-> *descry* (v.) — to catch sight of something distant or hidden; to discern.
+write beats, build synth voices and turn recorded sounds into instruments.
+arrange phrases into songs, launch chains live and reshape the mix with the
+touchscreen. everything runs on the console.
 
-**new here? read the [user guide](docs/GUIDE.md)** — quickstart, the data
-model, every screen, all FX commands, sampling and performance tricks.
+- **eight tracks** with song → chain → phrase sequencing, variable phrase lengths and three fx columns per step.
+- **five engines**: wavsynth with user wavetables, four-operator fm, sampler, drumkit and an analog-style dsn voice.
+- **movement and variation**: modulation tables, 23 fx commands, groove, swing, conditions and phrase generators.
+- **sampling**: microphone recording, master resampling, wav import, slicing, editing and procedural drum sounds.
+- **live performance**: touch keyboard, pads, mixer, assignable xy control and quantized chain launches.
+- **mixing and export**: per-track processing, shared delay/reverb, stereo wav export and synchronized dry stems.
 
-## what it is
+[download](https://github.com/patausx/descry/releases/latest) · [user guide & installation](docs/GUIDE.md) · [build from source](BUILDING.md) · [changelog](CHANGELOG.md)
 
-descry is a portable tracker in the tradition of [LSDj](https://www.littlesounddj.com),
-[Dirtywave M8](https://dirtywave.com) and the discontinued Korg DSN-12: song → chain → phrase
-hierarchy, hex editing, a set of synth engines, and the 3DS touchscreen for live input.
+## status
 
-it needs a **New** 3DS/2DS — the synth uses the faster CPU and the extra core.
-old 3DS is not supported.
+`v1.0.7` · homebrew.
 
-## screenshots
-
-| | |
-| --- | --- |
-| ![song view playing](docs/song.png) | ![phrase + fx list](docs/phrase.png) |
-| ![mixer + touch faders](docs/mixer.png) | ![kaoss xy pad](docs/kaoss.png) |
-| ![sampler](docs/sampler.png) | ![sample slicing](docs/slices.png) |
-| ![projects + themes](docs/project_themes.png) | ![oscilloscope](docs/scope.png) |
-
-## features
-
-**sequencer**
-- song (256 rows × 8 tracks) → chain (16 rows + transpose) → phrase (16 steps)
-- phrase steps: note · instrument · velocity · 3 FX columns
-- 23 FX commands (pitch, arp, retrig, delay, kill, filter, sends, LFO, chance,
-  conditional trigger, hop, tempo...) with a built-in reference: press SELECT on
-  an FX column to open the command list
-- per-instrument mod tables (3 FX lanes × 16 rows, adjustable tick rate)
-- groove patterns (ticks per step) and swing
-- key/scale snap for the touch keyboard (11 scales)
-- per-phrase length for polymetry
-- live mode: quantized chain launch per track, solo pads
-- clone (deep copy) for chains and phrases, undo/redo (including whole-instrument
-  history for preset loads), block selection copy/paste
-- Phrase Tools over the whole playable phrase or selected rows: transforms plus
-  seeded Euclidean rhythms, density, humanize, ratchets, scale-aware mutation and
-  probability/condition fills; every result is one undo operation
-
-**instruments** (all fixed-point, 32 kHz)
-- wavsynth — classic waves with unison/detune, plus user wavetables
-  (drop single-cycle WAVs on the SD card)
-- FM — 4 operators, 8 algorithms, feedback, per-op ADSR and waveform
-- sampler — chops/slices, loop modes, WAV loader with folder browser
-- drumkit — 16 pads → 16 sample slots
-- DSN voice — 2 VCO / VCF / 2 EG / 2 MG analog-style voice
-- preset banks for each engine
-
-**mixing / performance**
-- 8 tracks × 4 voices, per-track filter (LPF/HPF/BPF/notch), bitcrush,
-  downsample, LFO routing, pan
-- global ping-pong delay + reverb, sidechain duck, soft-clip master with DC blocker
-- mixer view with touch faders, meters and peak hold
-- KAOSS-style XY pad: two assignable destinations, per-track or all tracks at
-  once, parameters ramp back on release
-- circle pad provides accelerated Song movement and sampler waveform pan/zoom;
-  C-stick is a velocity-sensitive value encoder with fine/coarse steps
-
-**sampling**
-- record from the built-in mic straight into a sample slot (hold ZR)
-- 12 procedural drum/tone generators — build a kit with no files at all
-- sample editor: crop, normalize, reverse, fades and slice markers with a
-  Circle Pad viewport zoom up to 256×
-- one-pass dry stem export for DAW work: synchronized reference mix + arranged
-  tracks, keeping track DSP/pan/duck while leaving global delay/reverb unbaked
-
-**misc**
-- 6 color themes (tap the DESCRY logo to pick)
-- fullscreen oscilloscope (L+SELECT)
-- screenshots to SD (R+SELECT, saves both screens as BMP)
-- battery + clock in the header, autosave on exit
-
-## controls
-
-| input | action |
-| --- | --- |
-| D-pad | move cursor |
-| A / B | edit value ±1 · X / Y — ±16 (context-dependent) |
-| L / R (tap) | previous / next view |
-| L + D-pad | BPM · R + ↑↓ groove · R + ←→ swing |
-| ZL + X / Y | copy / paste · ZL + B / A — undo / redo |
-| ZL + SELECT | clone (song/chain) · selection mode (phrase) · dry stems (project) |
-| R + X | Phrase Tools (whole playable phrase or selected rows) |
-| SELECT | preview note · FX command list (on FX columns) |
-| L + SELECT | fullscreen oscilloscope |
-| R + SELECT | screenshot → SD |
-| ZR (hold) | mic record |
-| START | play / stop · SELECT + START — exit |
-| START (song view) | plays from the cursor row · L + START — from the top |
-| touch | keyboard / pads / XY pad / faders / tabs |
-
-## install
-
-grab the [latest release](https://github.com/patausx/descry/releases/latest):
-
-- **CIA** — install `descry.cia` with FBI for a Home Menu install
-- **3DSX** — copy `descry.3dsx` to `/3ds/descry/descry.3dsx` on the SD
-  card and launch it from the Homebrew Launcher
-- **3DS** — use `descry.3ds` with a compatible flashcart or emulator
-
-v1.0.7 does not repeat the separate IRONLUNG bundle; it remains available on the
-older release page.
-
-## build
-
-requires devkitPro with the 3DS toolchain:
-
-```sh
-sudo (dkp-)pacman -S 3ds-dev
-make        # descry.3dsx
-make cia    # descry.cia (needs makerom + bannertool on PATH)
-make cci    # descry.3ds
-```
-
-produces `descry.3dsx` — copy to `/3ds/descry/` on the SD card and launch from
-the homebrew launcher.
-
-## files on SD
-
-everything lives under `sdmc:/3ds/descry/`:
-- `session.tr3d` — autosaved session
-- `project_XX.tr3d` — 16 save slots
-- `sample_XX.s16` — recorded/loaded samples
-- `wav/` — put your own WAVs here (subfolders work)
-- `wavetable/` — single-cycle WAVs for the wavsynth USER shape
-- `screens/` — screenshots
-- `renders/` — song exports, named after the project
-
-## architecture
-
-```
-core/          # platform-independent (also builds on x86 for testing)
-  audio/       # fixed-point math, mixer, voices, reverb
-  dsp/         # SVF filter, LFO
-  synth/       # wavsynth, fm, sampler, drumkit, dsn, mic, wav loader
-  sequencer/   # types, project, player, serialization, FX
-  ui/          # views, navigation, editing, themes
-platform/3ds/  # libctru, ndsp audio, citro2d, mic
-tools/         # host-side demo generators and render/analysis helpers
-```
-
-## thanks
-
-descry is written by one person on real hardware, which means the bugs that
-survive are the ones I can't reproduce. bug reports are worth a lot here —
-if you hit something, please [open an issue](https://github.com/patausx/descry/issues).
-
-- **[@francorv99](https://github.com/francorv99)** — reported that song exports
-  couldn't be named and overwrote each other
-  ([#6](https://github.com/patausx/descry/issues/6)). led to project-named
-  exports in `renders/` in v1.0.5
-- an external code audit of v1.0.4 surfaced two use-after-free races between the
-  UI and the audio thread, fixed in v1.0.5
-
-## see also
-
-- [LSDj](https://www.littlesounddj.com) · [Dirtywave M8](https://dirtywave.com) —
-  the giants whose shoulders this stands on.
+**requires a new 3ds, new 3ds xl or new 2ds xl.**
+original 3ds/2ds is not supported.
 
 ## license
 
-GPL-3.0 — see [LICENSE](LICENSE).
-
-made by patausx. inspired by LSDj, the M8 and the DSN-12.
-not affiliated with Dirtywave, Nintendo or Korg.
+[gpl-3.0](LICENSE). independent homebrew, not an official nintendo product.

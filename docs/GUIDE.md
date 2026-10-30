@@ -15,6 +15,27 @@ descry needs a **new** 3ds/2ds. everything below assumes you launched
 
 ---
 
+## installation
+
+get a package from the [latest release](https://github.com/patausx/descry/releases/latest).
+use a **new 3ds, new 3ds xl or new 2ds xl** already configured for homebrew;
+original 3ds/2ds is not supported.
+
+- **`.cia`** — install `descry.cia` with fbi for a home menu entry.
+- **`.3dsx`** — copy `descry.3dsx` to `sdmc:/3ds/descry/descry.3dsx` and open it
+  from the homebrew launcher.
+- **`.3ds`** — cci package for compatible flashcarts or emulators; availability
+  of the package is not a guarantee of compatibility with every setup.
+
+projects, samples and settings live under `sdmc:/3ds/descry/`.
+**back up this folder before updating; replace the application, not your data.**
+put your own wav files in its `wav/` subfolder. built-in synthesis and procedural
+drum generators work without an external sample pack.
+
+for compilation and packaging, see [building](../BUILDING.md).
+
+---
+
 ## 1. first beat in five minutes
 
 a hands-on quickstart. exact buttons, no theory.
