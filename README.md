@@ -15,6 +15,18 @@ touchscreen. everything runs on the console.
 
 [download](https://github.com/patausx/descry/releases/latest) · [user guide & installation](docs/GUIDE.md) · [build from source](BUILDING.md) · [changelog](CHANGELOG.md)
 
+<details>
+<summary>screenshots</summary>
+
+| | |
+| --- | --- |
+| ![song view playing](docs/song.png) | ![phrase + fx list](docs/phrase.png) |
+| ![mixer + touch faders](docs/mixer.png) | ![kaoss xy pad](docs/kaoss.png) |
+| ![sampler](docs/sampler.png) | ![sample slicing](docs/slices.png) |
+| ![projects + themes](docs/project_themes.png) | ![oscilloscope](docs/scope.png) |
+
+</details>
+
 ## status
 
 `v1.0.7` · homebrew.
